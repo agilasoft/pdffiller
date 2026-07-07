@@ -19,16 +19,95 @@
 	background: var(--card-bg);
 }
 
+.pdffiller-viewer-body {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+}
+
+.pdffiller-form-wrapper {
+	width: 320px;
+	min-width: 280px;
+	border-right: 1px solid var(--border-color);
+	background: var(--card-bg);
+	overflow: auto;
+}
+
+.pdffiller-form-panel {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+}
+
+.pdffiller-form-panel-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 12px 16px;
+	border-bottom: 1px solid var(--border-color);
+}
+
+.pdffiller-form-panel-header h6 {
+	margin: 0;
+	font-weight: 600;
+}
+
+.pdffiller-form-fields {
+	padding: 12px 16px 16px;
+	overflow: auto;
+}
+
+.pdffiller-field-group {
+	margin-bottom: 12px;
+}
+
+.pdffiller-field-group:last-child {
+	margin-bottom: 0;
+}
+
+.pdffiller-field-readonly .pdffiller-readonly-value {
+	padding: 6px 8px;
+	border: 1px solid var(--border-color);
+	border-radius: var(--border-radius);
+	background: var(--disabled-control-bg);
+	font-size: var(--text-sm);
+	word-break: break-word;
+}
+
 .pdffiller-viewer-frame {
 	flex: 1;
 	min-height: 0;
 	background: #323639;
+	position: relative;
 }
 
 .pdffiller-viewer-frame object,
 .pdffiller-viewer-frame embed {
 	display: block;
 	border: 0;
+}
+
+.pdffiller-loading {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 100%;
+	padding: 16px;
+}
+
+@media (max-width: 991px) {
+	.pdffiller-viewer-body {
+		flex-direction: column;
+	}
+
+	.pdffiller-form-wrapper {
+		width: 100%;
+		min-width: 0;
+		max-height: 220px;
+		border-right: 0;
+		border-bottom: 1px solid var(--border-color);
+	}
 }
 
 @media (max-width: 767px) {

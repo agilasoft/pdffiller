@@ -7,6 +7,7 @@ frappe.provide("pdffiller.forms");
 
 	const SKIP_DOCTYPES = new Set(["PDF Form Template", "PDF Form Field Mapping"]);
 	const cache = {};
+	const DEFAULT_GROUP = __("Forms");
 
 	function should_skip_form(frm) {
 		if (!frm || !frm.doc || !frm.doctype) return true;
@@ -23,16 +24,37 @@ frappe.provide("pdffiller.forms");
 		});
 	}
 
-	function add_buttons(frm, templates) {
+	function group_templates(templates) {
+		const groups = {};
 		templates.forEach(function (template) {
-			frm.add_custom_button(
-				template.title,
-				function () {
-					pdffiller.viewer.open(frm, template.name, template.title);
-				},
-				__("Forms")
-			);
+			const group_name = (template.group || "").trim() || DEFAULT_GROUP;
+			if (!groups[group_name]) {
+				groups[group_name] = [];
+			}
+			groups[group_name].push(template);
 		});
+		return groups;
+	}
+
+	function add_buttons(frm, templates) {
+		const groups = group_templates(templates);
+		Object.keys(groups)
+			.sort(function (a, b) {
+				if (a === DEFAULT_GROUP) return 1;
+				if (b === DEFAULT_GROUP) return -1;
+				return a.localeCompare(b);
+			})
+			.forEach(function (group_name) {
+				groups[group_name].forEach(function (template) {
+					frm.add_custom_button(
+						template.title,
+						function () {
+							pdffiller.viewer.open(frm, template.name, template.title);
+						},
+						group_name
+					);
+				});
+			});
 	}
 
 	function fetch_templates(frm, callback) {

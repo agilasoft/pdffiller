@@ -65,21 +65,43 @@ def fill_pdf(template_path: str, form_data: dict[str, str]) -> bytes:
 		doc.close()
 
 
-def build_form_data(template_doc, source_doc) -> dict[str, str]:
+def build_form_data(template_doc, source_doc, overrides: dict[str, str] | None = None) -> dict[str, str]:
 	from pdffiller.utils.field_resolver import resolve_mapping_value
 
+	overrides = overrides or {}
 	form_data: dict[str, str] = {}
 	for row in template_doc.field_mappings:
 		if not row.pdf_field_name:
 			continue
-		form_data[row.pdf_field_name] = resolve_mapping_value(source_doc, row)
+		if row.pdf_field_name in overrides:
+			form_data[row.pdf_field_name] = overrides[row.pdf_field_name] or ""
+		else:
+			form_data[row.pdf_field_name] = resolve_mapping_value(source_doc, row)
 	return form_data
 
 
-def fill_template_pdf(template_doc, source_doc) -> bytes:
+def build_field_preview(template_doc, source_doc) -> list[dict]:
+	from pdffiller.utils.field_resolver import resolve_mapping_value
+
+	fields = []
+	for row in template_doc.field_mappings:
+		if not row.pdf_field_name:
+			continue
+		fields.append(
+			{
+				"pdf_field_name": row.pdf_field_name,
+				"value": resolve_mapping_value(source_doc, row),
+				"editable": bool(row.editable),
+				"source_type": row.source_type or "Field Path",
+			}
+		)
+	return fields
+
+
+def fill_template_pdf(template_doc, source_doc, overrides: dict[str, str] | None = None) -> bytes:
 	if not template_doc.pdf_file:
 		frappe.throw(frappe._("PDF Form Template has no PDF file attached"))
 
 	pdf_path = get_pdf_path(template_doc.pdf_file)
-	form_data = build_form_data(template_doc, source_doc)
+	form_data = build_form_data(template_doc, source_doc, overrides=overrides)
 	return fill_pdf(pdf_path, form_data)
