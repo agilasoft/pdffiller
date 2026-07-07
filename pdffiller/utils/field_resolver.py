@@ -3,17 +3,64 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import Any
 
 import frappe
 from frappe.utils import cstr, flt, formatdate, getdate
 
+JINJA_MARKERS = re.compile(r"(\{\{|\{%)")
+
+
+def get_jinja_context(source_doc) -> dict[str, Any]:
+	return {
+		"doc": source_doc,
+		"frappe": frappe.utils,
+	}
+
+
+def is_jinja_template(value: str) -> bool:
+	return bool(JINJA_MARKERS.search(value or ""))
+
+
+def get_source_type(mapping_row) -> str:
+	source_type = (getattr(mapping_row, "source_type", None) or "").strip()
+	if source_type:
+		return source_type
+
+	if getattr(mapping_row, "jinja_script", None):
+		return "Jinja Script"
+	if is_jinja_template(getattr(mapping_row, "source_field", None)):
+		return "Jinja Template"
+	return "Field Path"
+
+
+def render_jinja_template(template: str, source_doc) -> str:
+	template = (template or "").strip()
+	if not template:
+		return ""
+
+	try:
+		return cstr(frappe.render_template(template, get_jinja_context(source_doc))).strip()
+	except Exception:
+		frappe.log_error(
+			title="PDF Form Template Jinja Error",
+			message=frappe.get_traceback(),
+		)
+		return ""
+
 
 def resolve_mapping_value(source_doc, mapping_row) -> str:
 	value = ""
 	raw_dates = bool(mapping_row.date_format)
-	if mapping_row.source_field:
+	source_type = get_source_type(mapping_row)
+
+	if source_type == "Jinja Script":
+		value = render_jinja_template(mapping_row.jinja_script, source_doc)
+	elif source_type == "Jinja Template":
+		value = render_jinja_template(mapping_row.source_field, source_doc)
+	elif mapping_row.source_field:
 		value = resolve_field_path(source_doc, mapping_row.source_field, raw_dates=raw_dates)
 
 	if value in (None, ""):

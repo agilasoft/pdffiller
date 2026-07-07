@@ -4,10 +4,11 @@
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 import fitz
 
-from pdffiller.utils.pdf_filler import fill_pdf, list_acroform_fields, template_has_widgets
+from pdffiller.utils.pdf_filler import build_field_preview, build_form_data, fill_pdf, list_acroform_fields, template_has_widgets
 
 
 def _make_fillable_pdf(path: str, fields: dict[str, str]) -> None:
@@ -45,6 +46,61 @@ class TestPdfFiller(unittest.TestCase):
 		output.close()
 		self.assertEqual(fields.get("FieldA"), "Hello")
 		self.assertEqual(fields.get("FieldB"), "World")
+
+	def test_build_form_data_with_overrides(self):
+		template_doc = SimpleNamespace(
+			field_mappings=[
+				SimpleNamespace(
+					pdf_field_name="FieldA",
+					source_type="Field Path",
+					source_field="name",
+					jinja_script="",
+					default_value="",
+					date_format="",
+					editable=0,
+				),
+				SimpleNamespace(
+					pdf_field_name="FieldB",
+					source_type="Field Path",
+					source_field="",
+					jinja_script="",
+					default_value="Default",
+					date_format="",
+					editable=1,
+				),
+			]
+		)
+		source_doc = SimpleNamespace(
+			meta=SimpleNamespace(get_field=lambda _f: SimpleNamespace(fieldtype="Data")),
+			name="DOC-001",
+		)
+		form_data = build_form_data(template_doc, source_doc, overrides={"FieldB": "Override"})
+		self.assertEqual(form_data["FieldA"], "DOC-001")
+		self.assertEqual(form_data["FieldB"], "Override")
+
+	def test_build_field_preview(self):
+		template_doc = SimpleNamespace(
+			field_mappings=[
+				SimpleNamespace(
+					pdf_field_name="FieldA",
+					source_type="Field Path",
+					source_field="name",
+					jinja_script="",
+					default_value="",
+					date_format="",
+					editable=1,
+				)
+			]
+		)
+		source_doc = SimpleNamespace(
+			meta=SimpleNamespace(get_field=lambda _f: SimpleNamespace(fieldtype="Data")),
+			name="DOC-001",
+		)
+		preview = build_field_preview(template_doc, source_doc)
+		self.assertEqual(len(preview), 1)
+		self.assertEqual(preview[0]["pdf_field_name"], "FieldA")
+		self.assertEqual(preview[0]["value"], "DOC-001")
+		self.assertTrue(preview[0]["editable"])
 
 
 if __name__ == "__main__":

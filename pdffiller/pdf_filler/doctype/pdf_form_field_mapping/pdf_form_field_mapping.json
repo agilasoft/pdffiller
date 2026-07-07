@@ -6,9 +6,12 @@
  "engine": "InnoDB",
  "field_order": [
   "pdf_field_name",
+  "source_type",
   "source_field",
+  "jinja_script",
   "default_value",
-  "date_format"
+  "date_format",
+  "editable"
  ],
  "fields": [
   {
@@ -19,11 +22,27 @@
    "reqd": 1
   },
   {
+   "default": "Field Path",
+   "fieldname": "source_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Source Type",
+   "options": "Field Path\nJinja Template\nJinja Script"
+  },
+  {
    "fieldname": "source_field",
-   "fieldtype": "Data",
+   "fieldtype": "Small Text",
    "in_list_view": 1,
    "label": "Source Field",
-   "description": "DocType field path, e.g. posting_date or supplier.tax_id"
+   "description": "Field path (e.g. posting_date or supplier.tax_id) or Jinja template (e.g. {{ doc.supplier_name }})"
+  },
+  {
+   "depends_on": "eval:doc.source_type=='Jinja Script'",
+   "fieldname": "jinja_script",
+   "fieldtype": "Code",
+   "label": "Jinja Script",
+   "options": "Jinja",
+   "description": "Multi-line Jinja script to compute the field value. The doc object is available as doc."
   },
   {
    "fieldname": "default_value",
@@ -36,6 +55,14 @@
    "fieldtype": "Select",
    "label": "Date Format",
    "options": "\n%d-%m-%Y\n%m/%d/%Y\n%Y-%m-%d\n%d/%m/%Y"
+  },
+  {
+   "default": "0",
+   "fieldname": "editable",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Editable",
+   "description": "Allow editing this field in the PDF filler view"
   }
  ],
  "istable": 1,

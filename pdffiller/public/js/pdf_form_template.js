@@ -42,6 +42,7 @@ function scan_pdf_fields(frm) {
 				if (existing.has(field_name)) return;
 				const row = frm.add_child("field_mappings");
 				row.pdf_field_name = field_name;
+				row.source_type = "Field Path";
 				added += 1;
 			});
 

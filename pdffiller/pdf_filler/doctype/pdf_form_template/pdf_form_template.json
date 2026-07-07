@@ -9,6 +9,7 @@
  "field_order": [
   "title",
   "reference_doctype",
+  "group",
   "column_break_1",
   "disabled",
   "show_on_draft",
@@ -35,6 +36,14 @@
    "label": "Reference DocType",
    "options": "DocType",
    "reqd": 1
+  },
+  {
+   "fieldname": "group",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Group",
+   "description": "Custom menu group for the Forms button. Templates with the same group appear under one submenu."
   },
   {
    "fieldname": "column_break_1",
