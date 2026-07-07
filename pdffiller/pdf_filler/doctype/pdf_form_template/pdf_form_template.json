@@ -13,6 +13,7 @@
   "column_break_1",
   "disabled",
   "show_on_draft",
+  "display_depends_on",
   "section_break_pdf",
   "pdf_file",
   "section_break_mappings",
@@ -61,6 +62,12 @@
    "fieldtype": "Check",
    "label": "Show on Draft",
    "description": "Show the Forms menu button before the document is submitted"
+  },
+  {
+   "fieldname": "display_depends_on",
+   "fieldtype": "Data",
+   "label": "Display Depends On (JS)",
+   "description": "Optional condition to show this form in the custom Forms menu, e.g. eval:doc.party_type=='Customer'"
   },
   {
    "fieldname": "section_break_pdf",
