@@ -11,6 +11,7 @@ import frappe
 from frappe import _
 from frappe.utils import cstr
 
+from pdffiller.utils.display_condition import should_display_template
 from pdffiller.utils.pdf_filler import build_field_preview, fill_template_pdf, get_pdf_path, list_acroform_fields
 
 
@@ -43,17 +44,35 @@ def _parse_overrides(overrides) -> dict[str, str]:
 	frappe.throw(_("Field overrides must be a JSON object"))
 
 
+def _filter_templates_for_doc(templates: list[dict], reference_doctype: str, name: str | None) -> list[dict]:
+	if not templates:
+		return []
+
+	unconditional = [template for template in templates if not (template.get("display_depends_on") or "").strip()]
+	if not name:
+		return unconditional
+
+	source_doc = frappe.get_doc(reference_doctype, name)
+	return [template for template in templates if should_display_template(template, source_doc)]
+
+
 @frappe.whitelist()
-def get_templates(reference_doctype: str) -> list[dict]:
+def get_templates(reference_doctype: str, name: str | None = None) -> list[dict]:
 	if not reference_doctype:
 		return []
 
-	return frappe.get_all(
+	templates = frappe.get_all(
 		"PDF Form Template",
 		filters={"reference_doctype": reference_doctype, "disabled": 0},
-		fields=["name", "title", "show_on_draft", "group"],
+		fields=["name", "title", "show_on_draft", "group", "display_depends_on"],
 		order_by="group asc, title asc",
 	)
+	return _filter_templates_for_doc(templates, reference_doctype, name)
+
+
+def _validate_template_visible(template_doc, source_doc):
+	if not should_display_template(template_doc, source_doc):
+		frappe.throw(_("This PDF form is not available for this document"))
 
 
 @frappe.whitelist()
@@ -68,6 +87,8 @@ def get_form_preview(template: str, doctype: str, name: str) -> dict:
 		frappe.throw(_("This PDF form template is disabled"))
 
 	source_doc = frappe.get_doc(doctype, name)
+	_validate_template_visible(template_doc, source_doc)
+
 	return {
 		"template": template_doc.name,
 		"title": template_doc.title,
@@ -87,8 +108,10 @@ def get_filled_pdf(template: str, doctype: str, name: str, field_overrides: str 
 		frappe.throw(_("This PDF form template is disabled"))
 
 	source_doc = frappe.get_doc(doctype, name)
+	_validate_template_visible(template_doc, source_doc)
+
 	overrides = _parse_overrides(field_overrides)
-	_validate_editable_overrides(template_doc, overrides, source_doc=source_doc)
+	_validate_editable_overrides(template_doc, overrides)
 
 	pdf_bytes = fill_template_pdf(template_doc, source_doc, overrides=overrides)
 	encoded = base64.b64encode(pdf_bytes).decode("ascii")
@@ -100,18 +123,14 @@ def get_filled_pdf(template: str, doctype: str, name: str, field_overrides: str 
 	}
 
 
-def _validate_editable_overrides(template_doc, overrides: dict[str, str], source_doc=None):
+def _validate_editable_overrides(template_doc, overrides: dict[str, str]):
 	if not overrides:
 		return
-
-	from pdffiller.utils.display_condition import should_display_field
 
 	editable_fields = {
 		row.pdf_field_name
 		for row in template_doc.field_mappings
-		if row.pdf_field_name
-		and row.editable
-		and (source_doc is None or should_display_field(row, source_doc))
+		if row.pdf_field_name and row.editable
 	}
 	for field_name in overrides:
 		if field_name not in editable_fields:

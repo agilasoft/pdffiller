@@ -57,26 +57,37 @@ frappe.provide("pdffiller.forms");
 			});
 	}
 
+	function cache_key(frm) {
+		return `${frm.doctype}:${frm.doc.name}`;
+	}
+
 	function fetch_templates(frm, callback) {
-		const doctype = frm.doctype;
-		if (cache[doctype]) {
-			callback(filter_templates(frm, cache[doctype]));
+		const key = cache_key(frm);
+		if (cache[key]) {
+			callback(filter_templates(frm, cache[key]));
 			return;
 		}
 
 		frappe.call({
 			method: "pdffiller.api.forms.get_templates",
-			args: { reference_doctype: doctype },
+			args: {
+				reference_doctype: frm.doctype,
+				name: frm.doc.name,
+			},
 			callback(r) {
-				cache[doctype] = r.message || [];
-				callback(filter_templates(frm, cache[doctype]));
+				cache[key] = r.message || [];
+				callback(filter_templates(frm, cache[key]));
 			},
 		});
 	}
 
 	pdffiller.forms.clear_cache = function (doctype) {
 		if (doctype) {
-			delete cache[doctype];
+			Object.keys(cache).forEach(function (key) {
+				if (key.startsWith(`${doctype}:`)) {
+					delete cache[key];
+				}
+			});
 			return;
 		}
 		Object.keys(cache).forEach(function (key) {

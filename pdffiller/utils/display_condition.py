@@ -6,8 +6,8 @@ from __future__ import annotations
 import frappe
 
 
-def should_display_field(mapping_row, source_doc) -> bool:
-	condition = (getattr(mapping_row, "display_depends_on", None) or "").strip()
+def should_display_template(template, source_doc) -> bool:
+	condition = _get_display_depends_on(template)
 	if not condition:
 		return True
 	return bool(evaluate_depends_on(source_doc, condition))
@@ -33,6 +33,12 @@ def evaluate_depends_on(doc, expression: str) -> bool:
 		return not bool(_get_doc_value(doc, fieldname))
 
 	return bool(_get_doc_value(doc, expression))
+
+
+def _get_display_depends_on(template) -> str:
+	if isinstance(template, dict):
+		return (template.get("display_depends_on") or "").strip()
+	return (getattr(template, "display_depends_on", None) or "").strip()
 
 
 def _get_doc_value(doc, fieldname: str):

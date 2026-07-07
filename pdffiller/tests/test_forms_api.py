@@ -6,7 +6,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from pdffiller.api.forms import _parse_overrides, _safe_filename, get_templates
+from pdffiller.api.forms import _filter_templates_for_doc, _parse_overrides, _safe_filename, get_templates
 
 
 class TestFormsApi(unittest.TestCase):
@@ -28,12 +28,32 @@ class TestFormsApi(unittest.TestCase):
 		self.assertEqual(_parse_overrides(None), {})
 		self.assertEqual(_parse_overrides(""), {})
 
+	def test_filter_templates_without_doc_name(self):
+		templates = [
+			{"name": "Always", "display_depends_on": ""},
+			{"name": "Conditional", "display_depends_on": "eval:doc.docstatus==1"},
+		]
+		result = _filter_templates_for_doc(templates, "Payment Entry", None)
+		self.assertEqual([template["name"] for template in result], ["Always"])
+
+	@patch("pdffiller.api.forms.frappe.get_doc")
+	@patch("pdffiller.api.forms.should_display_template")
+	def test_filter_templates_for_doc(self, mock_should_display, _mock_get_doc):
+		templates = [
+			{"name": "Form A", "display_depends_on": ""},
+			{"name": "Form B", "display_depends_on": "eval:doc.docstatus==1"},
+		]
+		mock_should_display.side_effect = [True, False]
+		result = _filter_templates_for_doc(templates, "Payment Entry", "PE-001")
+		self.assertEqual([template["name"] for template in result], ["Form A"])
+
 
 class TestValidateEditableOverrides(unittest.TestCase):
 	@patch("pdffiller.api.forms.fill_template_pdf", return_value=b"pdf")
 	@patch("pdffiller.api.forms.frappe.get_doc")
 	@patch("pdffiller.api.forms.frappe.has_permission", return_value=True)
-	def test_rejects_non_editable_override(self, _perm, mock_get_doc, _fill):
+	@patch("pdffiller.api.forms.should_display_template", return_value=True)
+	def test_rejects_non_editable_override(self, _visible, _perm, mock_get_doc, _fill):
 		from pdffiller.api.forms import get_filled_pdf
 
 		template_doc = SimpleNamespace(

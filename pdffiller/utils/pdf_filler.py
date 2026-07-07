@@ -66,15 +66,12 @@ def fill_pdf(template_path: str, form_data: dict[str, str]) -> bytes:
 
 
 def build_form_data(template_doc, source_doc, overrides: dict[str, str] | None = None) -> dict[str, str]:
-	from pdffiller.utils.display_condition import should_display_field
 	from pdffiller.utils.field_resolver import resolve_mapping_value
 
 	overrides = overrides or {}
 	form_data: dict[str, str] = {}
 	for row in template_doc.field_mappings:
 		if not row.pdf_field_name:
-			continue
-		if not should_display_field(row, source_doc):
 			continue
 		if row.pdf_field_name in overrides:
 			form_data[row.pdf_field_name] = overrides[row.pdf_field_name] or ""
@@ -84,14 +81,11 @@ def build_form_data(template_doc, source_doc, overrides: dict[str, str] | None =
 
 
 def build_field_preview(template_doc, source_doc) -> list[dict]:
-	from pdffiller.utils.display_condition import should_display_field
 	from pdffiller.utils.field_resolver import resolve_mapping_value
 
 	fields = []
 	for row in template_doc.field_mappings:
 		if not row.pdf_field_name:
-			continue
-		if not should_display_field(row, source_doc):
 			continue
 		fields.append(
 			{
@@ -99,7 +93,6 @@ def build_field_preview(template_doc, source_doc) -> list[dict]:
 				"value": resolve_mapping_value(source_doc, row),
 				"editable": bool(row.editable),
 				"source_type": row.source_type or "Field Path",
-				"display_depends_on": row.display_depends_on or "",
 			}
 		)
 	return fields
