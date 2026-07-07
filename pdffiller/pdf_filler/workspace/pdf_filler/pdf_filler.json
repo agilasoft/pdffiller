@@ -1,0 +1,45 @@
+{
+ "app": "pdffiller",
+ "charts": [],
+ "content": "[]",
+ "creation": "2026-07-07 00:00:00.000000",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "for_user": "",
+ "hide_custom": 0,
+ "icon": "file",
+ "idx": 0,
+ "is_hidden": 0,
+ "label": "PDF Filler",
+ "links": [
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Templates",
+   "link_count": 0,
+   "link_to": "PDF Form Template",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  }
+ ],
+ "modified": "2026-07-07 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "PDF Filler",
+ "name": "PDF Filler",
+ "owner": "Administrator",
+ "parent_page": "",
+ "public": 1,
+ "roles": [],
+ "shortcuts": [
+  {
+   "color": "Blue",
+   "doc_view": "List",
+   "label": "PDF Form Template",
+   "link_to": "PDF Form Template",
+   "type": "DocType"
+  }
+ ],
+ "title": "PDF Filler"
+}
