@@ -11,7 +11,8 @@
   "jinja_script",
   "default_value",
   "date_format",
-  "editable"
+  "editable",
+  "display_depends_on"
  ],
  "fields": [
   {
@@ -63,6 +64,12 @@
    "in_list_view": 1,
    "label": "Editable",
    "description": "Allow editing this field in the PDF filler view"
+  },
+  {
+   "fieldname": "display_depends_on",
+   "fieldtype": "Data",
+   "label": "Display Depends On (JS)",
+   "description": "Optional condition to show this field in the PDF filler view and filled PDF, e.g. eval:doc.party_type=='Customer'"
   }
  ],
  "istable": 1,

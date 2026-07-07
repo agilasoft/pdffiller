@@ -88,7 +88,7 @@ def get_filled_pdf(template: str, doctype: str, name: str, field_overrides: str 
 
 	source_doc = frappe.get_doc(doctype, name)
 	overrides = _parse_overrides(field_overrides)
-	_validate_editable_overrides(template_doc, overrides)
+	_validate_editable_overrides(template_doc, overrides, source_doc=source_doc)
 
 	pdf_bytes = fill_template_pdf(template_doc, source_doc, overrides=overrides)
 	encoded = base64.b64encode(pdf_bytes).decode("ascii")
@@ -100,14 +100,18 @@ def get_filled_pdf(template: str, doctype: str, name: str, field_overrides: str 
 	}
 
 
-def _validate_editable_overrides(template_doc, overrides: dict[str, str]):
+def _validate_editable_overrides(template_doc, overrides: dict[str, str], source_doc=None):
 	if not overrides:
 		return
+
+	from pdffiller.utils.display_condition import should_display_field
 
 	editable_fields = {
 		row.pdf_field_name
 		for row in template_doc.field_mappings
-		if row.pdf_field_name and row.editable
+		if row.pdf_field_name
+		and row.editable
+		and (source_doc is None or should_display_field(row, source_doc))
 	}
 	for field_name in overrides:
 		if field_name not in editable_fields:

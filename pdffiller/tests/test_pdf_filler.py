@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import fitz
 
@@ -58,6 +59,7 @@ class TestPdfFiller(unittest.TestCase):
 					default_value="",
 					date_format="",
 					editable=0,
+					display_depends_on="",
 				),
 				SimpleNamespace(
 					pdf_field_name="FieldB",
@@ -67,6 +69,7 @@ class TestPdfFiller(unittest.TestCase):
 					default_value="Default",
 					date_format="",
 					editable=1,
+					display_depends_on="",
 				),
 			]
 		)
@@ -89,6 +92,7 @@ class TestPdfFiller(unittest.TestCase):
 					default_value="",
 					date_format="",
 					editable=1,
+					display_depends_on="",
 				)
 			]
 		)
@@ -101,6 +105,46 @@ class TestPdfFiller(unittest.TestCase):
 		self.assertEqual(preview[0]["pdf_field_name"], "FieldA")
 		self.assertEqual(preview[0]["value"], "DOC-001")
 		self.assertTrue(preview[0]["editable"])
+
+	def test_build_form_data_skips_hidden_fields(self):
+		template_doc = SimpleNamespace(
+			field_mappings=[
+				SimpleNamespace(
+					pdf_field_name="FieldA",
+					source_type="Field Path",
+					source_field="name",
+					jinja_script="",
+					default_value="",
+					date_format="",
+					editable=0,
+					display_depends_on="eval:doc.docstatus==1",
+				),
+				SimpleNamespace(
+					pdf_field_name="FieldB",
+					source_type="Field Path",
+					source_field="",
+					jinja_script="",
+					default_value="Visible",
+					date_format="",
+					editable=0,
+					display_depends_on="",
+				),
+			]
+		)
+		source_doc = SimpleNamespace(
+			meta=SimpleNamespace(get_field=lambda _f: SimpleNamespace(fieldtype="Data")),
+			name="DOC-001",
+			docstatus=0,
+		)
+
+		with patch(
+			"pdffiller.utils.display_condition.frappe.safe_eval",
+			side_effect=lambda expr, _globals, _locals: _locals["doc"].docstatus == 1,
+		):
+			form_data = build_form_data(template_doc, source_doc)
+
+		self.assertNotIn("FieldA", form_data)
+		self.assertEqual(form_data["FieldB"], "Visible")
 
 
 if __name__ == "__main__":
