@@ -47,9 +47,33 @@ def list_acroform_fields(pdf_path: str) -> list[str]:
 	return sorted(fields)
 
 
-def fill_pdf(template_path: str, form_data: dict[str, str]) -> bytes:
+def _is_truthy_checkbox_value(value: str) -> bool:
+	return (value or "").strip().lower() in ("yes", "true", "1", "on")
+
+
+def _checkbox_is_checked(value) -> bool:
+	if value is True:
+		return True
+	if value is False:
+		return False
+	return (str(value or "").strip().lower()) not in ("", "off", "no", "false", "0")
+
+
+def _set_widget_value(widget, value: str) -> None:
+	if widget.field_type_string in ("CheckBox", "Checkbox"):
+		widget.field_value = _is_truthy_checkbox_value(value)
+	else:
+		widget.field_value = value or ""
+
+
+def fill_pdf(
+	template_path: str,
+	form_data: dict[str, str],
+	readonly_fields: set[str] | None = None,
+) -> bytes:
 	import fitz
 
+	readonly_fields = readonly_fields or set()
 	doc = fitz.open(template_path)
 	try:
 		for page in doc:
@@ -58,7 +82,9 @@ def fill_pdf(template_path: str, form_data: dict[str, str]) -> bytes:
 				widget = widgets.get(field_name)
 				if not widget or widget.field_type_string == "RadioButton":
 					continue
-				widget.field_value = value or ""
+				_set_widget_value(widget, value)
+				if field_name in readonly_fields:
+					widget.field_flags = widget.field_flags | fitz.PDF_FIELD_IS_READ_ONLY
 				widget.update()
 		return doc.tobytes(garbage=4, deflate=True)
 	finally:
@@ -98,10 +124,19 @@ def build_field_preview(template_doc, source_doc) -> list[dict]:
 	return fields
 
 
+def _get_readonly_fields(template_doc) -> set[str]:
+	return {
+		row.pdf_field_name
+		for row in template_doc.field_mappings
+		if row.pdf_field_name and not row.editable
+	}
+
+
 def fill_template_pdf(template_doc, source_doc, overrides: dict[str, str] | None = None) -> bytes:
 	if not template_doc.pdf_file:
 		frappe.throw(frappe._("PDF Form Template has no PDF file attached"))
 
 	pdf_path = get_pdf_path(template_doc.pdf_file)
 	form_data = build_form_data(template_doc, source_doc, overrides=overrides)
-	return fill_pdf(pdf_path, form_data)
+	readonly_fields = _get_readonly_fields(template_doc)
+	return fill_pdf(pdf_path, form_data, readonly_fields=readonly_fields)

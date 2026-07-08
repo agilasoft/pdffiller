@@ -47,6 +47,21 @@ class TestPdfFiller(unittest.TestCase):
 		self.assertEqual(fields.get("FieldA"), "Hello")
 		self.assertEqual(fields.get("FieldB"), "World")
 
+	def test_fill_pdf_marks_readonly_fields(self):
+		pdf_bytes = fill_pdf(
+			self.template_path,
+			{"FieldA": "Hello", "FieldB": "World"},
+			readonly_fields={"FieldA"},
+		)
+		output = fitz.open(stream=pdf_bytes, filetype="pdf")
+		flags = {
+			widget.field_name: widget.field_flags & fitz.PDF_FIELD_IS_READ_ONLY
+			for widget in output[0].widgets() or []
+		}
+		output.close()
+		self.assertTrue(flags.get("FieldA"))
+		self.assertFalse(flags.get("FieldB"))
+
 	def test_build_form_data_with_overrides(self):
 		template_doc = SimpleNamespace(
 			field_mappings=[

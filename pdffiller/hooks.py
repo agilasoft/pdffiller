@@ -14,6 +14,9 @@ app_include_css = [
 	"/assets/pdffiller/css/pdf_form_submenu.css",
 ]
 
-fixtures = [{"dt": "Workspace", "filters": [["module", "=", "PDF Filler"]]}]
+fixtures = [
+	{"dt": "Workspace", "filters": [["module", "=", "PDF Filler"]]},
+	{"dt": "Page", "filters": [["name", "=", "pdf-field-designer"]]},
+]
 
 doctype_js = {"PDF Form Template": "public/js/pdf_form_template.js"}
