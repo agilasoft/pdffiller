@@ -78,7 +78,41 @@
 	font-weight: 600;
 	text-transform: uppercase;
 	color: var(--text-muted, #666);
+}
+
+.pfd-collapsible-section + .pfd-collapsible-section {
+	margin-top: 14px;
+}
+
+.pfd-panel-toggle {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	width: 100%;
+	padding: 0;
 	margin-bottom: 8px;
+	background: none;
+	border: none;
+	cursor: pointer;
+	text-align: left;
+}
+
+.pfd-panel-toggle:hover .pfd-panel-title {
+	color: var(--text-color, #333);
+}
+
+.pfd-panel-toggle-icon {
+	transition: transform 0.15s ease;
+	color: var(--text-muted, #666);
+	flex-shrink: 0;
+}
+
+.pfd-collapsible-section--collapsed .pfd-panel-toggle-icon {
+	transform: rotate(-90deg);
+}
+
+.pfd-collapsible-section--collapsed .pfd-collapsible-body {
+	display: none;
 }
 
 .pfd-palette-item {
@@ -174,10 +208,6 @@
 	font-size: 8px;
 	line-height: 1.1;
 	opacity: 0.85;
-}
-
-.pfd-panel-spaced {
-	margin-top: 14px;
 }
 
 .pfd-field-filter {
