@@ -9,7 +9,10 @@ app_include_js = [
 	"/assets/pdffiller/js/pdf_viewer_dialog.js",
 	"/assets/pdffiller/js/pdf_form_buttons.js",
 ]
-app_include_css = ["/assets/pdffiller/css/pdf_viewer_dialog.css"]
+app_include_css = [
+	"/assets/pdffiller/css/pdf_viewer_dialog.css",
+	"/assets/pdffiller/css/pdf_form_submenu.css",
+]
 
 fixtures = [{"dt": "Workspace", "filters": [["module", "=", "PDF Filler"]]}]
 

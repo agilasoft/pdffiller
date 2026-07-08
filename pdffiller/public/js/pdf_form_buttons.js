@@ -24,37 +24,103 @@ frappe.provide("pdffiller.forms");
 		});
 	}
 
-	function group_templates(templates) {
-		const groups = {};
+	function parse_group_path(group) {
+		const trimmed = (group || "").trim();
+		if (!trimmed) return [];
+		return trimmed
+			.split(/\s*\/\s*|\s*>\s*/)
+			.map(function (part) {
+				return part.trim();
+			})
+			.filter(Boolean);
+	}
+
+	function create_tree_node() {
+		return { templates: [], children: {} };
+	}
+
+	function build_menu_tree(templates) {
+		const root = create_tree_node();
 		templates.forEach(function (template) {
-			const group_name = (template.group || "").trim() || DEFAULT_GROUP;
-			if (!groups[group_name]) {
-				groups[group_name] = [];
-			}
-			groups[group_name].push(template);
+			const path = parse_group_path(template.group);
+			let node = root;
+			path.forEach(function (segment) {
+				if (!node.children[segment]) {
+					node.children[segment] = create_tree_node();
+				}
+				node = node.children[segment];
+			});
+			node.templates.push(template);
 		});
-		return groups;
+		return root;
+	}
+
+	function sort_tree_node(node) {
+		node.templates.sort(function (a, b) {
+			return a.title.localeCompare(b.title);
+		});
+		Object.keys(node.children)
+			.sort(function (a, b) {
+				return a.localeCompare(b);
+			})
+			.forEach(function (key) {
+				sort_tree_node(node.children[key]);
+			});
+	}
+
+	function open_template(frm, template) {
+		return function () {
+			pdffiller.viewer.open(frm, template.name, template.title);
+		};
+	}
+
+	function add_mobile_menu_item(frm, menu_path, action) {
+		const menu_item = frm.page.add_menu_item(menu_path, action, false, false, false);
+		menu_item.parent().addClass("hidden-xl");
+		if (frm.page.menu_btn_group.hasClass("hide")) {
+			frm.page.menu_btn_group.removeClass("hide").addClass("hidden-xl");
+		}
+	}
+
+	function render_menu_node(frm, $container, node, path) {
+		Object.keys(node.children).forEach(function (name) {
+			const child = node.children[name];
+			const child_path = path.concat(name);
+			const $submenu = $(
+				`<li class="dropdown-submenu pdffiller-submenu">
+					<a class="dropdown-item" href="#" onclick="return false;">${frappe.utils.escape_html(
+						name
+					)}</a>
+					<ul class="dropdown-menu"></ul>
+				</li>`
+			);
+			render_menu_node(frm, $submenu.find(".dropdown-menu"), child, child_path);
+			$submenu.appendTo($container);
+		});
+
+		node.templates.forEach(function (template) {
+			const menu_path = path.concat(template.title).join(" > ");
+			const action = open_template(frm, template);
+			add_mobile_menu_item(frm, menu_path, action);
+			$(
+				`<a class="dropdown-item" href="#" onclick="return false;" data-label="${encodeURIComponent(
+					template.title
+				)}">${frappe.utils.escape_html(template.title)}</a>`
+			)
+				.on("click", action)
+				.appendTo($container);
+		});
 	}
 
 	function add_buttons(frm, templates) {
-		const groups = group_templates(templates);
-		Object.keys(groups)
-			.sort(function (a, b) {
-				if (a === DEFAULT_GROUP) return 1;
-				if (b === DEFAULT_GROUP) return -1;
-				return a.localeCompare(b);
-			})
-			.forEach(function (group_name) {
-				groups[group_name].forEach(function (template) {
-					frm.add_custom_button(
-						template.title,
-						function () {
-							pdffiller.viewer.open(frm, template.name, template.title);
-						},
-						group_name
-					);
-				});
-			});
+		const tree = build_menu_tree(templates);
+		sort_tree_node(tree);
+
+		const $group = frm.page.get_or_add_inner_group_button(DEFAULT_GROUP);
+		const $menu = $group.find(".dropdown-menu");
+		$menu.empty();
+		$(frm.page.inner_toolbar).removeClass("hide");
+		render_menu_node(frm, $menu, tree, [DEFAULT_GROUP]);
 	}
 
 	function cache_key(frm) {
