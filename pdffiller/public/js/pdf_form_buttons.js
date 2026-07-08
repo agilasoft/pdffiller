@@ -7,7 +7,6 @@ frappe.provide("pdffiller.forms");
 
 	const SKIP_DOCTYPES = new Set(["PDF Form Template", "PDF Form Field Mapping"]);
 	const cache = {};
-	const DEFAULT_GROUP = __("Forms");
 
 	function should_skip_form(frm) {
 		if (!frm || !frm.doc || !frm.doctype) return true;
@@ -25,36 +24,84 @@ frappe.provide("pdffiller.forms");
 	}
 
 	function group_templates(templates) {
-		const groups = {};
+		const grouped = {};
+		const ungrouped = [];
+
 		templates.forEach(function (template) {
-			const group_name = (template.group || "").trim() || DEFAULT_GROUP;
-			if (!groups[group_name]) {
-				groups[group_name] = [];
+			const group = (template.group || "").trim();
+			if (group) {
+				if (!grouped[group]) {
+					grouped[group] = [];
+				}
+				grouped[group].push(template);
+			} else {
+				ungrouped.push(template);
 			}
-			groups[group_name].push(template);
 		});
-		return groups;
+
+		Object.keys(grouped).forEach(function (group_name) {
+			grouped[group_name].sort(function (a, b) {
+				return a.title.localeCompare(b.title);
+			});
+		});
+
+		ungrouped.sort(function (a, b) {
+			return a.title.localeCompare(b.title);
+		});
+
+		return { grouped, ungrouped };
 	}
 
-	function add_buttons(frm, templates) {
-		const groups = group_templates(templates);
-		Object.keys(groups)
+	function open_template(frm, template) {
+		return function () {
+			pdffiller.viewer.open(frm, template.name, template.title);
+		};
+	}
+
+	function add_mobile_menu_item(frm, label, action) {
+		const menu_item = frm.page.add_menu_item(label, action, false, false, false);
+		menu_item.parent().addClass("hidden-xl");
+		if (frm.page.menu_btn_group.hasClass("hide")) {
+			frm.page.menu_btn_group.removeClass("hide").addClass("hidden-xl");
+		}
+	}
+
+	function add_grouped_buttons(frm, grouped) {
+		Object.keys(grouped)
 			.sort(function (a, b) {
-				if (a === DEFAULT_GROUP) return 1;
-				if (b === DEFAULT_GROUP) return -1;
 				return a.localeCompare(b);
 			})
 			.forEach(function (group_name) {
-				groups[group_name].forEach(function (template) {
-					frm.add_custom_button(
-						template.title,
-						function () {
-							pdffiller.viewer.open(frm, template.name, template.title);
-						},
-						group_name
-					);
+				const group_label = __(group_name);
+				const $group = frm.page.get_or_add_inner_group_button(group_label);
+				const $menu = $group.find(".dropdown-menu");
+				$menu.empty();
+
+				grouped[group_name].forEach(function (template) {
+					const action = open_template(frm, template);
+					add_mobile_menu_item(frm, `${group_label} > ${template.title}`, action);
+					$(
+						`<a class="dropdown-item" href="#" onclick="return false;" data-label="${encodeURIComponent(
+							template.title
+						)}">${frappe.utils.escape_html(template.title)}</a>`
+					)
+						.on("click", action)
+						.appendTo($menu);
 				});
 			});
+	}
+
+	function add_buttons(frm, templates) {
+		const { grouped, ungrouped } = group_templates(templates);
+		$(frm.page.inner_toolbar).removeClass("hide");
+
+		ungrouped.forEach(function (template) {
+			const action = open_template(frm, template);
+			add_mobile_menu_item(frm, template.title, action);
+			frm.page.add_inner_button(template.title, action);
+		});
+
+		add_grouped_buttons(frm, grouped);
 	}
 
 	function cache_key(frm) {

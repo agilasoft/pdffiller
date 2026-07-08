@@ -24,8 +24,8 @@ class PDFFormTemplate(Document):
 			if not template_has_widgets(pdf_path):
 				frappe.msgprint(
 					_(
-						"The attached PDF has no AcroForm fields. "
-						"Use a fillable PDF template or field values will not appear."
+						"The attached PDF has no fillable fields yet. "
+						"Use Design Fields to add them, or attach a fillable PDF template."
 					),
 					indicator="orange",
 					title=_("No Fillable Fields"),

@@ -1,6 +1,11 @@
 frappe.ui.form.on("PDF Form Template", {
 	refresh(frm) {
 		if (!frm.is_new()) {
+			if (frm.doc.pdf_file) {
+				frm.add_custom_button(__("Design Fields"), function () {
+					frappe.set_route("pdf-field-designer", frm.doc.name);
+				});
+			}
 			frm.add_custom_button(__("Scan PDF Fields"), function () {
 				scan_pdf_fields(frm);
 			});

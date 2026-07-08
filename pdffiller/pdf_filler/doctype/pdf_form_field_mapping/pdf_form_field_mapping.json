@@ -62,7 +62,7 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "Editable",
-   "description": "Allow editing this field in the PDF filler view"
+   "description": "When unchecked, the field cannot be edited in the PDF filler side panel or directly in the embedded PDF."
   }
  ],
  "istable": 1,

@@ -62,14 +62,23 @@ frappe.provide("pdffiller.viewer");
 		return `
 			<div class="pdffiller-form-panel">
 				<div class="pdffiller-form-panel-header">
-					<h6>${__("Field Values")}</h6>
-					${
-						has_editable
-							? `<button type="button" class="btn btn-primary btn-sm pdffiller-refresh-btn">
-								${__("Update PDF")}
-							</button>`
-							: `<span class="text-muted small">${__("All fields are read-only")}</span>`
-					}
+					<button type="button" class="btn btn-default btn-xs pdffiller-form-panel-toggle" title="${__(
+						"Field Values"
+					)}">
+						${frappe.utils.icon("right", "xs", "pdffiller-form-panel-toggle-icon")}
+						<span class="pdffiller-form-panel-toggle-label">${__("Field Values")}</span>
+					</button>
+					<div class="pdffiller-form-panel-actions">
+						${
+							has_editable
+								? `<button type="button" class="btn btn-primary btn-sm pdffiller-refresh-btn">
+									${__("Update PDF")}
+								</button>`
+								: `<span class="text-muted small pdffiller-readonly-note">${__(
+										"All fields are read-only"
+								  )}</span>`
+						}
+					</div>
 				</div>
 				<div class="pdffiller-form-fields">
 					${fields_html || `<p class="text-muted">${__("No mapped fields found.")}</p>`}
@@ -141,6 +150,12 @@ frappe.provide("pdffiller.viewer");
 
 		$viewer.find(".pdffiller-refresh-btn").off("click").on("click", function () {
 			load_filled_pdf($viewer, state, frm, template_name);
+		});
+
+		$viewer.find(".pdffiller-form-panel-toggle").off("click").on("click", function () {
+			$viewer
+				.find(".pdffiller-form-wrapper")
+				.toggleClass("pdffiller-form-wrapper--collapsed");
 		});
 
 		$viewer.find(".pdffiller-field-input").off("keydown").on("keydown", function (event) {
@@ -223,7 +238,10 @@ frappe.provide("pdffiller.viewer");
 				}
 
 				state.fields = r.message.fields || [];
-				$viewer.find(".pdffiller-form-wrapper").html(render_form_panel(state.fields));
+				const $form_wrapper = $viewer.find(".pdffiller-form-wrapper");
+				$form_wrapper
+					.addClass("pdffiller-form-wrapper--collapsed")
+					.html(render_form_panel(state.fields));
 				bind_viewer_actions($viewer, state, frm, template_name);
 				load_filled_pdf($viewer, state, frm, template_name);
 			},
