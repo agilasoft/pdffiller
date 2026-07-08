@@ -250,6 +250,10 @@ frappe.provide("pdffiller.viewer");
 				}
 
 				state.fields = r.message.fields || [];
+				state.fields_only = Boolean(r.message.fields_only);
+				$viewer
+					.find(".pdffiller-fields-only-checkbox")
+					.prop("checked", state.fields_only);
 				const $form_wrapper = $viewer.find(".pdffiller-form-wrapper");
 				$form_wrapper
 					.addClass("pdffiller-form-wrapper--collapsed")

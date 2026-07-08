@@ -16,6 +16,7 @@
   "display_depends_on",
   "section_break_pdf",
   "pdf_file",
+  "fields_only",
   "section_break_mappings",
   "field_mappings"
  ],
@@ -79,6 +80,13 @@
    "fieldtype": "Attach",
    "label": "PDF File",
    "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "fields_only",
+   "fieldtype": "Check",
+   "label": "Fields only (no background)",
+   "description": "When enabled, print and download omit the PDF template background by default"
   },
   {
    "fieldname": "section_break_mappings",

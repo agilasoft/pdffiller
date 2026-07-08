@@ -93,6 +93,7 @@ def get_form_preview(template: str, doctype: str, name: str) -> dict:
 		"template": template_doc.name,
 		"title": template_doc.title,
 		"fields": build_field_preview(template_doc, source_doc),
+		"fields_only": bool(template_doc.fields_only),
 	}
 
 
@@ -102,7 +103,7 @@ def get_filled_pdf(
 	doctype: str,
 	name: str,
 	field_overrides: str | dict | None = None,
-	fields_only: int | bool = 0,
+	fields_only: int | bool | None = None,
 ) -> dict:
 	template_doc = _get_template(template)
 	_validate_source_access(doctype, name)
@@ -119,11 +120,16 @@ def get_filled_pdf(
 	overrides = _parse_overrides(field_overrides)
 	_validate_editable_overrides(template_doc, overrides)
 
+	use_fields_only = (
+		bool(int(fields_only or 0))
+		if fields_only is not None
+		else bool(template_doc.fields_only)
+	)
 	pdf_bytes = fill_template_pdf(
 		template_doc,
 		source_doc,
 		overrides=overrides,
-		fields_only=bool(int(fields_only or 0)),
+		fields_only=use_fields_only,
 	)
 	encoded = base64.b64encode(pdf_bytes).decode("ascii")
 	filename = _safe_filename(template_doc.title, name)
