@@ -60,6 +60,7 @@ class TestValidateEditableOverrides(unittest.TestCase):
 			reference_doctype="Payment Entry",
 			disabled=0,
 			title="Test Form",
+			fields_only=0,
 			field_mappings=[
 				SimpleNamespace(pdf_field_name="FieldA", editable=0),
 				SimpleNamespace(pdf_field_name="FieldB", editable=1),
@@ -84,6 +85,7 @@ class TestValidateEditableOverrides(unittest.TestCase):
 			reference_doctype="Payment Entry",
 			disabled=0,
 			title="Test Form",
+			fields_only=0,
 			field_mappings=[],
 		)
 		source_doc = SimpleNamespace()
@@ -96,6 +98,51 @@ class TestValidateEditableOverrides(unittest.TestCase):
 			overrides={},
 			fields_only=True,
 		)
+
+	@patch("pdffiller.api.forms.fill_template_pdf", return_value=b"pdf")
+	@patch("pdffiller.api.forms.frappe.get_doc")
+	@patch("pdffiller.api.forms.frappe.has_permission", return_value=True)
+	@patch("pdffiller.api.forms.should_display_template", return_value=True)
+	def test_uses_template_fields_only_default(self, _visible, _perm, mock_get_doc, mock_fill):
+		from pdffiller.api.forms import get_filled_pdf
+
+		template_doc = SimpleNamespace(
+			reference_doctype="Payment Entry",
+			disabled=0,
+			title="Test Form",
+			fields_only=1,
+			field_mappings=[],
+		)
+		source_doc = SimpleNamespace()
+		mock_get_doc.side_effect = [template_doc, source_doc]
+
+		get_filled_pdf("Test Form", "Payment Entry", "PE-001")
+		mock_fill.assert_called_once_with(
+			template_doc,
+			source_doc,
+			overrides={},
+			fields_only=True,
+		)
+
+	@patch("pdffiller.api.forms.build_field_preview", return_value=[])
+	@patch("pdffiller.api.forms.frappe.get_doc")
+	@patch("pdffiller.api.forms.frappe.has_permission", return_value=True)
+	@patch("pdffiller.api.forms.should_display_template", return_value=True)
+	def test_form_preview_returns_fields_only(self, _visible, _perm, mock_get_doc, _preview):
+		from pdffiller.api.forms import get_form_preview
+
+		template_doc = SimpleNamespace(
+			name="Test Form",
+			title="Test Form",
+			reference_doctype="Payment Entry",
+			disabled=0,
+			fields_only=1,
+		)
+		source_doc = SimpleNamespace()
+		mock_get_doc.side_effect = [template_doc, source_doc]
+
+		result = get_form_preview("Test Form", "Payment Entry", "PE-001")
+		self.assertTrue(result["fields_only"])
 
 
 if __name__ == "__main__":
