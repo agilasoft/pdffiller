@@ -8,7 +8,14 @@ from types import SimpleNamespace
 
 import fitz
 
-from pdffiller.utils.pdf_filler import build_field_preview, build_form_data, fill_pdf, list_acroform_fields, template_has_widgets
+from pdffiller.utils.pdf_filler import (
+	build_field_preview,
+	build_form_data,
+	fill_pdf,
+	fill_pdf_fields_only,
+	list_acroform_fields,
+	template_has_widgets,
+)
 
 
 def _make_fillable_pdf(path: str, fields: dict[str, str]) -> None:
@@ -61,6 +68,28 @@ class TestPdfFiller(unittest.TestCase):
 		output.close()
 		self.assertTrue(flags.get("FieldA"))
 		self.assertFalse(flags.get("FieldB"))
+
+	def test_fill_pdf_fields_only_omits_background(self):
+		template_doc = fitz.open(self.template_path)
+		template_page = template_doc[0]
+		template_page.insert_text((72, 50), "Background Label", fontsize=12)
+		with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+			background_path = tmp.name
+		template_doc.save(background_path)
+		template_doc.close()
+
+		pdf_bytes = fill_pdf_fields_only(background_path, {"FieldA": "Hello", "FieldB": "World"})
+		output = fitz.open(stream=pdf_bytes, filetype="pdf")
+		try:
+			self.assertEqual(len(output), 1)
+			page_text = output[0].get_text()
+			self.assertIn("Hello", page_text)
+			self.assertIn("World", page_text)
+			self.assertNotIn("Background Label", page_text)
+			self.assertEqual(list(output[0].widgets() or []), [])
+		finally:
+			output.close()
+			os.unlink(background_path)
 
 	def test_build_form_data_with_overrides(self):
 		template_doc = SimpleNamespace(

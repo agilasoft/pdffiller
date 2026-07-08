@@ -97,7 +97,13 @@ def get_form_preview(template: str, doctype: str, name: str) -> dict:
 
 
 @frappe.whitelist()
-def get_filled_pdf(template: str, doctype: str, name: str, field_overrides: str | dict | None = None) -> dict:
+def get_filled_pdf(
+	template: str,
+	doctype: str,
+	name: str,
+	field_overrides: str | dict | None = None,
+	fields_only: int | bool = 0,
+) -> dict:
 	template_doc = _get_template(template)
 	_validate_source_access(doctype, name)
 
@@ -113,7 +119,12 @@ def get_filled_pdf(template: str, doctype: str, name: str, field_overrides: str 
 	overrides = _parse_overrides(field_overrides)
 	_validate_editable_overrides(template_doc, overrides)
 
-	pdf_bytes = fill_template_pdf(template_doc, source_doc, overrides=overrides)
+	pdf_bytes = fill_template_pdf(
+		template_doc,
+		source_doc,
+		overrides=overrides,
+		fields_only=bool(int(fields_only or 0)),
+	)
 	encoded = base64.b64encode(pdf_bytes).decode("ascii")
 	filename = _safe_filename(template_doc.title, name)
 

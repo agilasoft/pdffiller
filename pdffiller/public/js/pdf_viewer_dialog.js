@@ -91,12 +91,18 @@ frappe.provide("pdffiller.viewer");
 		return `
 			<div class="pdffiller-viewer">
 				<div class="pdffiller-viewer-toolbar">
-					<button type="button" class="btn btn-default btn-sm pdffiller-print-btn" disabled>
-						${__("Print")}
-					</button>
-					<button type="button" class="btn btn-primary btn-sm pdffiller-download-btn" disabled>
-						${__("Download")}
-					</button>
+					<label class="pdffiller-fields-only-toggle">
+						<input type="checkbox" class="pdffiller-fields-only-checkbox" />
+						<span>${__("Fields only (no background)")}</span>
+					</label>
+					<div class="pdffiller-viewer-toolbar-actions">
+						<button type="button" class="btn btn-default btn-sm pdffiller-print-btn" disabled>
+							${__("Print")}
+						</button>
+						<button type="button" class="btn btn-primary btn-sm pdffiller-download-btn" disabled>
+							${__("Download")}
+						</button>
+					</div>
 				</div>
 				<div class="pdffiller-viewer-body">
 					<div class="pdffiller-form-wrapper"></div>
@@ -152,6 +158,11 @@ frappe.provide("pdffiller.viewer");
 			load_filled_pdf($viewer, state, frm, template_name);
 		});
 
+		$viewer.find(".pdffiller-fields-only-checkbox").off("change").on("change", function () {
+			state.fields_only = $(this).is(":checked");
+			load_filled_pdf($viewer, state, frm, template_name);
+		});
+
 		$viewer.find(".pdffiller-form-panel-toggle").off("click").on("click", function () {
 			$viewer
 				.find(".pdffiller-form-wrapper")
@@ -179,6 +190,7 @@ frappe.provide("pdffiller.viewer");
 				doctype: frm.doctype,
 				name: frm.doc.name,
 				field_overrides: overrides,
+				fields_only: state.fields_only ? 1 : 0,
 			},
 			freeze: true,
 			callback(r) {
@@ -210,7 +222,7 @@ frappe.provide("pdffiller.viewer");
 			],
 		});
 
-		const state = { fields: [], payload: null };
+		const state = { fields: [], payload: null, fields_only: false };
 		dialog.show();
 		dialog.$wrapper.find(".modal-body").addClass("pdffiller-dialog-body");
 

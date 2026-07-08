@@ -66,6 +66,80 @@ def _set_widget_value(widget, value: str) -> None:
 		widget.field_value = value or ""
 
 
+def _draw_text_field(page, rect, text: str, fontsize: float) -> None:
+	import fitz
+
+	fontsize = max(fontsize, 6)
+	page.insert_textbox(
+		rect,
+		text,
+		fontname="helv",
+		fontsize=fontsize,
+		color=(0, 0, 0),
+		align=fitz.TEXT_ALIGN_LEFT,
+	)
+
+
+def _draw_checkbox(page, rect, checked: bool) -> None:
+	import fitz
+
+	size = min(rect.width, rect.height)
+	if size <= 0:
+		return
+	center_x = (rect.x0 + rect.x1) / 2
+	center_y = (rect.y0 + rect.y1) / 2
+	half = size / 2
+	box = fitz.Rect(center_x - half, center_y - half, center_x + half, center_y + half)
+	page.draw_rect(box, color=(0, 0, 0), width=0.75)
+	if checked:
+		inset = size * 0.2
+		page.draw_line(
+			fitz.Point(box.x0 + inset, box.y0 + size * 0.5),
+			fitz.Point(box.x0 + size * 0.4, box.y1 - inset),
+			color=(0, 0, 0),
+			width=1,
+		)
+		page.draw_line(
+			fitz.Point(box.x0 + size * 0.4, box.y1 - inset),
+			fitz.Point(box.x1 - inset, box.y0 + inset),
+			color=(0, 0, 0),
+			width=1,
+		)
+
+
+def fill_pdf_fields_only(
+	template_path: str,
+	form_data: dict[str, str],
+) -> bytes:
+	import fitz
+
+	template_doc = fitz.open(template_path)
+	output_doc = fitz.open()
+	try:
+		for page_num in range(len(template_doc)):
+			template_page = template_doc[page_num]
+			rect = template_page.rect
+			output_page = output_doc.new_page(width=rect.width, height=rect.height)
+
+			widgets = {widget.field_name: widget for widget in (template_page.widgets() or [])}
+			for field_name, value in form_data.items():
+				widget = widgets.get(field_name)
+				if not widget or widget.field_type_string == "RadioButton":
+					continue
+
+				widget_rect = widget.rect
+				if widget.field_type_string in ("CheckBox", "Checkbox"):
+					_draw_checkbox(output_page, widget_rect, _is_truthy_checkbox_value(value))
+				elif (value or "").strip():
+					fontsize = float(getattr(widget, "text_fontsize", 0) or 10)
+					_draw_text_field(output_page, widget_rect, value, fontsize)
+
+		return output_doc.tobytes(garbage=4, deflate=True)
+	finally:
+		template_doc.close()
+		output_doc.close()
+
+
 def fill_pdf(
 	template_path: str,
 	form_data: dict[str, str],
@@ -132,11 +206,19 @@ def _get_readonly_fields(template_doc) -> set[str]:
 	}
 
 
-def fill_template_pdf(template_doc, source_doc, overrides: dict[str, str] | None = None) -> bytes:
+def fill_template_pdf(
+	template_doc,
+	source_doc,
+	overrides: dict[str, str] | None = None,
+	fields_only: bool = False,
+) -> bytes:
 	if not template_doc.pdf_file:
 		frappe.throw(frappe._("PDF Form Template has no PDF file attached"))
 
 	pdf_path = get_pdf_path(template_doc.pdf_file)
 	form_data = build_form_data(template_doc, source_doc, overrides=overrides)
+	if fields_only:
+		return fill_pdf_fields_only(pdf_path, form_data)
+
 	readonly_fields = _get_readonly_fields(template_doc)
 	return fill_pdf(pdf_path, form_data, readonly_fields=readonly_fields)
