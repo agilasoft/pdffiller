@@ -39,6 +39,10 @@ frappe.provide("pdffiller.designer");
 		scale: 1,
 		fieldCounter: 1,
 		fieldFilter: "",
+		collapsedSections: {
+			fieldTypes: false,
+			referenceFields: false,
+		},
 	};
 
 	function getTemplateName() {
@@ -374,6 +378,23 @@ frappe.provide("pdffiller.designer");
 		);
 	}
 
+	function renderCollapsibleSection(sectionId, title, bodyHtml) {
+		const collapsed = state.collapsedSections[sectionId];
+		return `
+			<div class="pfd-collapsible-section${
+				collapsed ? " pfd-collapsible-section--collapsed" : ""
+			}" data-section="${sectionId}">
+				<button type="button" class="pfd-panel-toggle" aria-expanded="${!collapsed}">
+					${frappe.utils.icon("down", "xs", "pfd-panel-toggle-icon")}
+					<span class="pfd-panel-title">${title}</span>
+				</button>
+				<div class="pfd-collapsible-body">
+					${bodyHtml}
+				</div>
+			</div>
+		`;
+	}
+
 	function renderPalette() {
 		return FIELD_TYPES.map(
 			(item) => `
@@ -618,13 +639,15 @@ frappe.provide("pdffiller.designer");
 			</div>
 			<div class="pfd-main">
 				<div class="pfd-left">
-					<div class="pfd-panel-title">${__("Field Types")}</div>
-					${renderPalette()}
-					<div class="pfd-panel-title pfd-panel-spaced">${__("Reference Fields")}</div>
-					<input type="text" class="pfd-field-filter" placeholder="${__("Search fields…")}" value="${frappe.utils.escape_html(
-						state.fieldFilter
-					)}" />
-					<div class="pfd-ref-fields">${renderReferenceFields()}</div>
+					${renderCollapsibleSection("fieldTypes", __("Field Types"), renderPalette())}
+					${renderCollapsibleSection(
+						"referenceFields",
+						__("Reference Fields"),
+						`<input type="text" class="pfd-field-filter" placeholder="${__("Search fields…")}" value="${frappe.utils.escape_html(
+							state.fieldFilter
+						)}" />
+						<div class="pfd-ref-fields">${renderReferenceFields()}</div>`
+					)}
 				</div>
 				<div class="pfd-center pfd-canvas-container">${renderCanvas()}</div>
 				<div class="pfd-right">
@@ -690,6 +713,19 @@ frappe.provide("pdffiller.designer");
 			item.addEventListener("dragstart", (e) => {
 				e.dataTransfer.setData("text/pfd-field-type", item.dataset.type);
 				e.dataTransfer.effectAllowed = "copy";
+			});
+		});
+
+		app.querySelectorAll(".pfd-panel-toggle").forEach((btn) => {
+			btn.addEventListener("click", () => {
+				const section = btn.closest(".pfd-collapsible-section");
+				if (!section) return;
+				const sectionId = section.dataset.section;
+				section.classList.toggle("pfd-collapsible-section--collapsed");
+				state.collapsedSections[sectionId] = section.classList.contains(
+					"pfd-collapsible-section--collapsed"
+				);
+				btn.setAttribute("aria-expanded", !state.collapsedSections[sectionId]);
 			});
 		});
 
