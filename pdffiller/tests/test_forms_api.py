@@ -53,7 +53,7 @@ class TestValidateEditableOverrides(unittest.TestCase):
 	@patch("pdffiller.api.forms.frappe.get_doc")
 	@patch("pdffiller.api.forms.frappe.has_permission", return_value=True)
 	@patch("pdffiller.api.forms.should_display_template", return_value=True)
-	def test_rejects_non_editable_override(self, _visible, _perm, mock_get_doc, _fill):
+	def test_rejects_non_editable_override(self, _visible, _perm, mock_get_doc, mock_fill):
 		from pdffiller.api.forms import get_filled_pdf
 
 		template_doc = SimpleNamespace(
@@ -70,6 +70,32 @@ class TestValidateEditableOverrides(unittest.TestCase):
 
 		with self.assertRaises(Exception):
 			get_filled_pdf("Test Form", "Payment Entry", "PE-001", field_overrides={"FieldA": "Changed"})
+
+		mock_fill.assert_not_called()
+
+	@patch("pdffiller.api.forms.fill_template_pdf", return_value=b"pdf")
+	@patch("pdffiller.api.forms.frappe.get_doc")
+	@patch("pdffiller.api.forms.frappe.has_permission", return_value=True)
+	@patch("pdffiller.api.forms.should_display_template", return_value=True)
+	def test_passes_fields_only_flag(self, _visible, _perm, mock_get_doc, mock_fill):
+		from pdffiller.api.forms import get_filled_pdf
+
+		template_doc = SimpleNamespace(
+			reference_doctype="Payment Entry",
+			disabled=0,
+			title="Test Form",
+			field_mappings=[],
+		)
+		source_doc = SimpleNamespace()
+		mock_get_doc.side_effect = [template_doc, source_doc]
+
+		get_filled_pdf("Test Form", "Payment Entry", "PE-001", fields_only=1)
+		mock_fill.assert_called_once_with(
+			template_doc,
+			source_doc,
+			overrides={},
+			fields_only=True,
+		)
 
 
 if __name__ == "__main__":
