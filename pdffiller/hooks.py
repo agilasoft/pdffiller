@@ -11,7 +11,6 @@ app_include_js = [
 ]
 app_include_css = [
 	"/assets/pdffiller/css/pdf_viewer_dialog.css",
-	"/assets/pdffiller/css/pdf_form_submenu.css",
 ]
 
 fixtures = [

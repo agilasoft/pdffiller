@@ -31,6 +31,42 @@
 	border-right: 1px solid var(--border-color);
 	background: var(--card-bg);
 	overflow: auto;
+	transition: width 0.2s ease, min-width 0.2s ease;
+}
+
+.pdffiller-form-wrapper--collapsed {
+	width: 44px;
+	min-width: 44px;
+	overflow: hidden;
+}
+
+.pdffiller-form-wrapper--collapsed .pdffiller-form-fields,
+.pdffiller-form-wrapper--collapsed .pdffiller-form-panel-actions {
+	display: none;
+}
+
+.pdffiller-form-wrapper--collapsed .pdffiller-form-panel-header {
+	flex-direction: column;
+	align-items: center;
+	justify-content: flex-start;
+	padding: 12px 8px;
+	border-bottom: 0;
+}
+
+.pdffiller-form-wrapper--collapsed .pdffiller-form-panel-toggle {
+	padding: 6px;
+}
+
+.pdffiller-form-wrapper--collapsed .pdffiller-form-panel-toggle-label {
+	display: none;
+}
+
+.pdffiller-form-wrapper--collapsed .pdffiller-form-panel-toggle-icon {
+	transform: rotate(0deg);
+}
+
+.pdffiller-form-wrapper:not(.pdffiller-form-wrapper--collapsed) .pdffiller-form-panel-toggle-icon {
+	transform: rotate(90deg);
 }
 
 .pdffiller-form-panel {
@@ -48,9 +84,20 @@
 	border-bottom: 1px solid var(--border-color);
 }
 
-.pdffiller-form-panel-header h6 {
-	margin: 0;
-	font-weight: 600;
+.pdffiller-form-panel-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.pdffiller-form-panel-toggle-icon {
+	transition: transform 0.2s ease;
+}
+
+.pdffiller-form-panel-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
 }
 
 .pdffiller-form-fields {

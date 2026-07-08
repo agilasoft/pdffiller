@@ -44,7 +44,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Group",
-   "description": "Menu path under the Forms button. Use / or > for nested levels, e.g. Tax Forms or Tax Forms/BIR. Leave blank to show at the top level of Forms."
+   "description": "Custom menu button label for this form. Templates with the same group appear under one dropdown."
   },
   {
    "fieldname": "column_break_1",
