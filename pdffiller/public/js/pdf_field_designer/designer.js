@@ -401,8 +401,8 @@ frappe.provide("pdffiller.designer");
 			<div class="pfd-palette-item" draggable="true" data-type="${item.type}" title="${__(
 				"Drag onto the PDF"
 			)}">
-				${frappe.utils.icon(item.icon, "sm")}
-				<span>${item.label}</span>
+				<span class="pfd-palette-item-icon">${frappe.utils.icon(item.icon, "sm")}</span>
+				<span class="pfd-palette-item-label">${item.label}</span>
 			</div>
 		`
 		).join("");

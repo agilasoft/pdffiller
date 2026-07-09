@@ -132,6 +132,22 @@
 	cursor: grab;
 	font-size: 12px;
 	user-select: none;
+	text-align: left;
+}
+
+.pfd-palette-item-icon {
+	display: inline-flex;
+	align-items: center;
+	flex: 0 0 auto;
+}
+
+.pfd-palette-item-icon .icon {
+	margin: 0;
+}
+
+.pfd-palette-item-label {
+	flex: 0 1 auto;
+	text-align: left;
 }
 
 .pfd-palette-item:hover {
