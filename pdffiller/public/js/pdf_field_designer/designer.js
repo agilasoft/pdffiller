@@ -385,8 +385,8 @@ frappe.provide("pdffiller.designer");
 				collapsed ? " pfd-collapsible-section--collapsed" : ""
 			}" data-section="${sectionId}">
 				<button type="button" class="pfd-panel-toggle" aria-expanded="${!collapsed}">
-					${frappe.utils.icon("down", "xs", "pfd-panel-toggle-icon")}
 					<span class="pfd-panel-title">${title}</span>
+					${frappe.utils.icon("down", "xs", "pfd-panel-toggle-icon")}
 				</button>
 				<div class="pfd-collapsible-body">
 					${bodyHtml}
