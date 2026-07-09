@@ -1,0 +1,120 @@
+{
+ "actions": [],
+ "creation": "2026-07-09 00:00:00.000000",
+ "doctype": "DocType",
+ "document_type": "Other",
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "section_provider",
+  "provider",
+  "model",
+  "api_key",
+  "column_break_provider",
+  "azure_endpoint",
+  "azure_deployment",
+  "ollama_base_url",
+  "section_access",
+  "allowed_roles",
+  "messages_per_hour"
+ ],
+ "fields": [
+  {
+   "default": "0",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled"
+  },
+  {
+   "fieldname": "section_provider",
+   "fieldtype": "Section Break",
+   "label": "LLM Provider"
+  },
+  {
+   "default": "OpenAI",
+   "fieldname": "provider",
+   "fieldtype": "Select",
+   "label": "Provider",
+   "options": "OpenAI\nAnthropic\nAzure OpenAI\nOllama",
+   "reqd": 1
+  },
+  {
+   "default": "gpt-4o-mini",
+   "fieldname": "model",
+   "fieldtype": "Data",
+   "label": "Model",
+   "reqd": 1
+  },
+  {
+   "fieldname": "api_key",
+   "fieldtype": "Password",
+   "label": "API Key"
+  },
+  {
+   "fieldname": "column_break_provider",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:doc.provider=='Azure OpenAI'",
+   "fieldname": "azure_endpoint",
+   "fieldtype": "Data",
+   "label": "Azure Endpoint"
+  },
+  {
+   "depends_on": "eval:doc.provider=='Azure OpenAI'",
+   "fieldname": "azure_deployment",
+   "fieldtype": "Data",
+   "label": "Azure Deployment"
+  },
+  {
+   "default": "http://localhost:11434",
+   "depends_on": "eval:doc.provider=='Ollama'",
+   "fieldname": "ollama_base_url",
+   "fieldtype": "Data",
+   "label": "Ollama Base URL"
+  },
+  {
+   "fieldname": "section_access",
+   "fieldtype": "Section Break",
+   "label": "Access"
+  },
+  {
+   "fieldname": "allowed_roles",
+   "fieldtype": "Table",
+   "label": "Allowed Roles",
+   "options": "PDF Filler AI Allowed Role"
+  },
+  {
+   "default": "30",
+   "fieldname": "messages_per_hour",
+   "fieldtype": "Int",
+   "label": "Requests Per Hour (per user)",
+   "non_negative": 1
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-07-09 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "PDF Filler",
+ "name": "PDF Filler AI Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
