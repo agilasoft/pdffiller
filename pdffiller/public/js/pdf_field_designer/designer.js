@@ -189,6 +189,7 @@ frappe.provide("pdffiller.designer");
 				if (pageInstance) {
 					pageInstance.set_title(state.title || __("PDF Field Designer"));
 				}
+				refreshAIStatus();
 				render();
 			},
 			error() {
@@ -226,23 +227,7 @@ frappe.provide("pdffiller.designer");
 			return;
 		}
 
-		const payload = state.fields.map((field) => ({
-			field_name: field.field_name.trim(),
-			field_type: field.field_type,
-			page: field.page,
-			x: round(field.x),
-			y: round(field.y),
-			width: round(field.width),
-			height: round(field.height),
-			font_size: field.font_size || 10,
-			source_type: field.source_type || "Field Path",
-			source_field: field.source_field || "",
-			jinja_script: field.jinja_script || "",
-			default_value: field.default_value || "",
-			date_format: field.date_format || "",
-			editable: field.editable ? 1 : 0,
-			options: field.options || "",
-		}));
+		const payload = getFieldsPayload();
 
 		frappe.call({
 			method: "pdffiller.api.designer.save_design",
@@ -268,6 +253,80 @@ frappe.provide("pdffiller.designer");
 
 	function round(value) {
 		return Math.round(value * 100) / 100;
+	}
+
+	function getFieldsPayload() {
+		return state.fields.map((field) => ({
+			field_name: field.field_name.trim(),
+			field_type: field.field_type,
+			page: field.page,
+			x: round(field.x),
+			y: round(field.y),
+			width: round(field.width),
+			height: round(field.height),
+			font_size: field.font_size || 10,
+			source_type: field.source_type || "Field Path",
+			source_field: field.source_field || "",
+			jinja_script: field.jinja_script || "",
+			default_value: field.default_value || "",
+			date_format: field.date_format || "",
+			editable: field.editable ? 1 : 0,
+			options: field.options || "",
+		}));
+	}
+
+	function applyAISuggestions(suggestions) {
+		if (!suggestions?.length) return;
+		let applied = 0;
+		for (const suggestion of suggestions) {
+			const field = state.fields.find((item) => item.field_name === suggestion.pdf_field_name);
+			if (!field) continue;
+			Object.assign(field, {
+				source_type: suggestion.source_type || "Field Path",
+				source_field: suggestion.source_field || "",
+				jinja_script: suggestion.jinja_script || "",
+			});
+			applied += 1;
+		}
+		if (!applied) {
+			frappe.show_alert({ message: __("No matching fields to update."), indicator: "orange" });
+			return;
+		}
+		markDirty();
+		render();
+		frappe.show_alert({
+			message: __("{0} mapping(s) applied", [applied]),
+			indicator: "green",
+		});
+	}
+
+	function openAIAssist() {
+		if (!pdffiller.designer.ai) return;
+		pdffiller.designer.ai.open({
+			templateName: state.templateName,
+			referenceDoctype: state.reference_doctype,
+			getFields: getFieldsPayload,
+			applySuggestions: applyAISuggestions,
+		});
+	}
+
+	let aiEnabled = false;
+
+	function refreshAIStatus() {
+		if (!pdffiller.designer.ai) return;
+		if (pdffiller.designer.ai.isEnabled()) {
+			aiEnabled = true;
+			return;
+		}
+		pdffiller.designer.ai.refreshStatus((enabled) => {
+			aiEnabled = enabled;
+			const btn = document.querySelector(".pfd-ai-btn");
+			if (btn) {
+				btn.classList.toggle("hidden", !enabled);
+			} else if (enabled && state.templateName) {
+				render();
+			}
+		});
 	}
 
 	function deleteSelectedField() {
@@ -633,6 +692,12 @@ frappe.provide("pdffiller.designer");
 				<div class="pfd-toolbar-title">${frappe.utils.escape_html(state.title || __("PDF Field Designer"))}</div>
 				<div class="pfd-toolbar-subtitle">${frappe.utils.escape_html(state.reference_doctype || "")}</div>
 				<div class="pfd-toolbar-actions">
+					<button type="button" class="btn btn-default btn-sm pfd-ai-btn${
+						aiEnabled ? "" : " hidden"
+					}" title="${__("AI field mapping assistant")}">
+						${frappe.utils.icon("magic", "xs")}
+						${__("AI Assist")}
+					</button>
 					<button type="button" class="btn btn-default btn-sm pfd-cancel-btn">${__("Back")}</button>
 					<button type="button" class="btn btn-primary btn-sm pfd-save-btn">${__("Save Design")}</button>
 				</div>
@@ -703,6 +768,7 @@ frappe.provide("pdffiller.designer");
 	}
 
 	function bindEvents(app) {
+		app.querySelector(".pfd-ai-btn")?.addEventListener("click", openAIAssist);
 		app.querySelector(".pfd-save-btn")?.addEventListener("click", saveDesign);
 		app.querySelector(".pfd-cancel-btn")?.addEventListener("click", () => {
 			if (state.dirty && !confirm(__("Discard unsaved changes?"))) return;
@@ -975,6 +1041,7 @@ frappe.provide("pdffiller.designer");
 			.addClass("pdffiller-designer-page")
 			.html('<div id="pdffiller-designer-app" class="pdffiller-designer-root"></div>');
 
+		refreshAIStatus();
 		refresh();
 	};
 
