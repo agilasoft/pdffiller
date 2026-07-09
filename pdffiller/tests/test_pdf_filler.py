@@ -91,6 +91,21 @@ class TestPdfFiller(unittest.TestCase):
 			output.close()
 			os.unlink(background_path)
 
+	def test_fill_pdf_fields_only_keeps_non_editable_fields(self):
+		pdf_bytes = fill_pdf_fields_only(
+			self.template_path,
+			{"FieldA": "Readonly Value", "FieldB": "Editable Value"},
+			mapped_fields={"FieldA", "FieldB"},
+			readonly_fields={"FieldA"},
+		)
+		output = fitz.open(stream=pdf_bytes, filetype="pdf")
+		try:
+			page_text = output[0].get_text()
+			self.assertIn("Readonly Value", page_text)
+			self.assertIn("Editable Value", page_text)
+		finally:
+			output.close()
+
 	def test_build_form_data_with_overrides(self):
 		template_doc = SimpleNamespace(
 			field_mappings=[
