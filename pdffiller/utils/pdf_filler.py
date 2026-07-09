@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 
 import frappe
+from frappe.utils import cstr
 from frappe.utils.file_manager import get_file_path
 
 
@@ -107,36 +108,50 @@ def _draw_checkbox(page, rect, checked: bool) -> None:
 		)
 
 
+def _get_mapped_fields(template_doc) -> set[str]:
+	return {row.pdf_field_name for row in template_doc.field_mappings if row.pdf_field_name}
+
+
 def fill_pdf_fields_only(
 	template_path: str,
 	form_data: dict[str, str],
+	mapped_fields: set[str] | None = None,
+	readonly_fields: set[str] | None = None,
 ) -> bytes:
 	import fitz
 
-	template_doc = fitz.open(template_path)
+	mapped_fields = mapped_fields or set(form_data.keys())
+	readonly_fields = readonly_fields or set()
+	filled_bytes = fill_pdf(template_path, form_data, readonly_fields=readonly_fields)
+	filled_doc = fitz.open(stream=filled_bytes, filetype="pdf")
 	output_doc = fitz.open()
 	try:
-		for page_num in range(len(template_doc)):
-			template_page = template_doc[page_num]
-			rect = template_page.rect
+		for page_num in range(len(filled_doc)):
+			filled_page = filled_doc[page_num]
+			rect = filled_page.rect
 			output_page = output_doc.new_page(width=rect.width, height=rect.height)
 
-			widgets = {widget.field_name: widget for widget in (template_page.widgets() or [])}
-			for field_name, value in form_data.items():
-				widget = widgets.get(field_name)
-				if not widget or widget.field_type_string == "RadioButton":
+			for widget in filled_page.widgets() or []:
+				field_name = widget.field_name
+				if not field_name or field_name not in mapped_fields:
+					continue
+				if widget.field_type_string == "RadioButton":
 					continue
 
 				widget_rect = widget.rect
 				if widget.field_type_string in ("CheckBox", "Checkbox"):
-					_draw_checkbox(output_page, widget_rect, _is_truthy_checkbox_value(value))
-				elif (value or "").strip():
-					fontsize = float(getattr(widget, "text_fontsize", 0) or 10)
-					_draw_text_field(output_page, widget_rect, value, fontsize)
+					_draw_checkbox(output_page, widget_rect, _checkbox_is_checked(widget.field_value))
+					continue
+
+				value = cstr(widget.field_value or form_data.get(field_name, ""))
+				if field_name not in readonly_fields and not value.strip():
+					continue
+				fontsize = float(getattr(widget, "text_fontsize", 0) or 10)
+				_draw_text_field(output_page, widget_rect, value, fontsize)
 
 		return output_doc.tobytes(garbage=4, deflate=True)
 	finally:
-		template_doc.close()
+		filled_doc.close()
 		output_doc.close()
 
 
@@ -217,8 +232,14 @@ def fill_template_pdf(
 
 	pdf_path = get_pdf_path(template_doc.pdf_file)
 	form_data = build_form_data(template_doc, source_doc, overrides=overrides)
-	if fields_only:
-		return fill_pdf_fields_only(pdf_path, form_data)
-
+	mapped_fields = _get_mapped_fields(template_doc)
 	readonly_fields = _get_readonly_fields(template_doc)
+	if fields_only:
+		return fill_pdf_fields_only(
+			pdf_path,
+			form_data,
+			mapped_fields=mapped_fields,
+			readonly_fields=readonly_fields,
+		)
+
 	return fill_pdf(pdf_path, form_data, readonly_fields=readonly_fields)
