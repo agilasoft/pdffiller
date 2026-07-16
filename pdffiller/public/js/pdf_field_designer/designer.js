@@ -17,6 +17,7 @@ frappe.provide("pdffiller.designer");
 		{ type: "Small Text", icon: "align-left", label: __("Small Text"), width: 200, height: 40, font_size: 10 },
 		{ type: "Long Text", icon: "align-left", label: __("Long Text"), width: 200, height: 60, font_size: 10 },
 		{ type: "Barcode", icon: "barcode", label: __("Barcode"), width: 180, height: 48, font_size: 10 },
+		{ type: "Image", icon: "image", label: __("Image"), width: 120, height: 120, font_size: 10 },
 	];
 
 	const MIN_WIDTH_PT = 20;
@@ -115,6 +116,7 @@ frappe.provide("pdffiller.designer");
 			"Small Text": "text",
 			"Long Text": "notes",
 			Barcode: "barcode",
+			Image: "image",
 		};
 		return map[type] || "field";
 	}
@@ -408,6 +410,9 @@ frappe.provide("pdffiller.designer");
 			"Text Editor": "Long Text",
 			"Long Text": "Long Text",
 			Barcode: "Barcode",
+			Image: "Image",
+			"Attach Image": "Image",
+			Attach: "Image",
 		};
 		return map[fieldtype] || fallback || "Data";
 	}
@@ -510,24 +515,43 @@ frappe.provide("pdffiller.designer");
 			? frappe.utils.escape_html(field.source_field)
 			: __("Unmapped");
 
+		const specialClass =
+			field.field_type === "Barcode"
+				? " pfd-field-overlay--barcode"
+				: field.field_type === "Image"
+					? " pfd-field-overlay--image"
+					: "";
+		const previewHtml =
+			field.field_type === "Barcode"
+				? `<svg class="pfd-barcode-preview" data-barcode-value="${frappe.utils.escape_html(
+						field.default_value || field.source_field || "1234567890"
+				  )}"></svg>`
+				: field.field_type === "Image"
+					? renderImagePreview(field)
+					: "";
+
 		return `
 			<div
-				class="pfd-field-overlay${selected}${field.field_type === "Barcode" ? " pfd-field-overlay--barcode" : ""}"
+				class="pfd-field-overlay${selected}${specialClass}"
 				data-field-id="${field.id}"
 				style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;"
 			>
-				${
-					field.field_type === "Barcode"
-						? `<svg class="pfd-barcode-preview" data-barcode-value="${frappe.utils.escape_html(
-								field.default_value || field.source_field || "1234567890"
-						  )}"></svg>`
-						: ""
-				}
+				${previewHtml}
 				<span class="pfd-field-label">${label}</span>
 				<span class="pfd-field-meta">${typeLabel} · ${mapLabel}</span>
 				<div class="pfd-resize-handle" data-resize="1"></div>
 			</div>
 		`;
+	}
+
+	function renderImagePreview(field) {
+		const src = (field.default_value || "").trim();
+		if (src) {
+			return `<img class="pfd-image-preview" src="${frappe.utils.escape_html(
+				src
+			)}" alt="" draggable="false" />`;
+		}
+		return `<div class="pfd-image-placeholder">${frappe.utils.icon("image", "md")}</div>`;
 	}
 
 	function renderCanvas() {
@@ -575,7 +599,7 @@ frappe.provide("pdffiller.designer");
 			return `<div class="pfd-empty-props">${__("Select a field to edit layout and mapping")}</div>`;
 		}
 
-		const showFont = !["Check", "Select", "Barcode"].includes(field.field_type);
+		const showFont = !["Check", "Select", "Barcode", "Image"].includes(field.field_type);
 		const showDateFormat = field.field_type === "Date" || field.date_format;
 		const showOptions = field.field_type === "Select";
 		const showSourceField = field.source_type !== "Jinja Script";

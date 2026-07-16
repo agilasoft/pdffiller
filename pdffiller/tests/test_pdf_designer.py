@@ -126,6 +126,27 @@ class TestPdfDesigner(unittest.TestCase):
 		self.assertIn("item_barcode", widgets)
 		self.assertEqual(_widget_type_label_from_widget(widgets["item_barcode"]), "Data")
 
+	def test_apply_field_layout_image_widget(self):
+		fields = [
+			{
+				"field_name": "photo",
+				"field_type": "Image",
+				"page": 0,
+				"x": 72,
+				"y": 72,
+				"width": 120,
+				"height": 120,
+				"font_size": 10,
+			}
+		]
+		pdf_bytes = apply_field_layout(self.plain_path, fields)
+		doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+		widgets = {widget.field_name: widget for widget in doc[0].widgets() or []}
+		doc.close()
+		self.assertIn("photo", widgets)
+		self.assertEqual(_widget_type_label_from_widget(widgets["photo"]), "Data")
+
+	def test_fill_pdf_checkbox_values(self):
 		fields = [
 			{
 				"field_name": "agree_terms",
