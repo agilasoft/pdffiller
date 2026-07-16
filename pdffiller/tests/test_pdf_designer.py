@@ -106,7 +106,26 @@ class TestPdfDesigner(unittest.TestCase):
 		self.assertEqual(_widget_type_label_from_widget(widgets["status"]), "Select")
 		self.assertEqual(_widget_type_label_from_widget(widgets["remarks"]), "Small Text")
 
-	def test_fill_pdf_checkbox_values(self):
+	def test_apply_field_layout_barcode_widget(self):
+		fields = [
+			{
+				"field_name": "item_barcode",
+				"field_type": "Barcode",
+				"page": 0,
+				"x": 72,
+				"y": 72,
+				"width": 180,
+				"height": 48,
+				"font_size": 10,
+			}
+		]
+		pdf_bytes = apply_field_layout(self.plain_path, fields)
+		doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+		widgets = {widget.field_name: widget for widget in doc[0].widgets() or []}
+		doc.close()
+		self.assertIn("item_barcode", widgets)
+		self.assertEqual(_widget_type_label_from_widget(widgets["item_barcode"]), "Data")
+
 		fields = [
 			{
 				"field_name": "agree_terms",
@@ -161,6 +180,38 @@ class TestPdfDesigner(unittest.TestCase):
 		self.assertEqual(merged[0]["source_field"], "supplier_name")
 		self.assertEqual(merged[0]["editable"], 1)
 
+	def test_merge_fields_with_mappings_preserves_field_type(self):
+		template_doc = SimpleNamespace(
+			field_mappings=[
+				SimpleNamespace(
+					pdf_field_name="item_barcode",
+					field_type="Barcode",
+					source_type="Field Path",
+					source_field="barcode",
+					jinja_script="",
+					default_value="",
+					date_format="",
+					editable=0,
+				)
+			]
+		)
+		pdf_fields = [
+			{
+				"field_name": "item_barcode",
+				"field_type": "Data",
+				"page": 0,
+				"x": 72,
+				"y": 72,
+				"width": 180,
+				"height": 48,
+				"font_size": 10,
+				"options": "",
+			}
+		]
+		merged = merge_fields_with_mappings(pdf_fields, template_doc)
+		self.assertEqual(merged[0]["field_type"], "Barcode")
+		self.assertEqual(merged[0]["source_field"], "barcode")
+
 	def test_sync_field_mappings_with_mapping_data(self):
 		template_doc = SimpleNamespace(field_mappings=[])
 		template_doc.set = lambda fieldname, rows: setattr(template_doc, fieldname, rows)
@@ -183,6 +234,7 @@ class TestPdfDesigner(unittest.TestCase):
 		row = template_doc.field_mappings[0]
 		self.assertEqual(row["source_field"], "grand_total")
 		self.assertEqual(row["default_value"], "0")
+		self.assertEqual(row["field_type"], "Currency")
 
 	@patch("pdffiller.api.designer.save_template_pdf")
 	@patch("pdffiller.api.designer.apply_field_layout")

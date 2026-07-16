@@ -23,6 +23,7 @@ FRAPPE_FIELD_TYPES = frozenset(
 		"Select",
 		"Small Text",
 		"Long Text",
+		"Barcode",
 		# Legacy aliases
 		"Text",
 		"Checkbox",
@@ -30,6 +31,7 @@ FRAPPE_FIELD_TYPES = frozenset(
 )
 
 DEFAULT_MAPPING = {
+	"field_type": "",
 	"source_type": "Field Path",
 	"source_field": "",
 	"jinja_script": "",
@@ -153,6 +155,8 @@ def merge_fields_with_mappings(pdf_fields: list[dict], template_doc) -> list[dic
 					"editable": int(row.editable or 0),
 				}
 			)
+			if row.field_type:
+				merged_field["field_type"] = _normalize_field_type(row.field_type)
 		if merged_field["field_type"] == "Date" and not merged_field["date_format"]:
 			merged_field["date_format"] = "%d-%m-%Y"
 		merged.append(merged_field)
@@ -326,6 +330,7 @@ def sync_field_mappings(template_doc, fields: list[dict]) -> tuple[int, int]:
 		rows.append(
 			{
 				"pdf_field_name": name,
+				"field_type": field.get("field_type") or "",
 				"source_type": field.get("source_type") or "Field Path",
 				"source_field": field.get("source_field") or "",
 				"jinja_script": field.get("jinja_script") or "",
