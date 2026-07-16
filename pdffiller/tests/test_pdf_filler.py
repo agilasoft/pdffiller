@@ -250,6 +250,122 @@ class TestPdfFiller(unittest.TestCase):
 		finally:
 			doc.close()
 
+	def _tiny_png_path(self) -> str:
+		import base64
+
+		png = base64.b64decode(
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+		)
+		path = os.path.join(self.tempdir, "tiny.png")
+		with open(path, "wb") as handle:
+			handle.write(png)
+		return path
+
+	def test_fill_pdf_renders_image_field(self):
+		fields = [
+			{
+				"field_name": "photo",
+				"field_type": "Image",
+				"page": 0,
+				"x": 72,
+				"y": 72,
+				"width": 120,
+				"height": 120,
+				"font_size": 10,
+			}
+		]
+		pdf_bytes = apply_field_layout(self.template_path, fields)
+		output_path = os.path.join(self.tempdir, "image.pdf")
+		with open(output_path, "wb") as handle:
+			handle.write(pdf_bytes)
+
+		image_path = self._tiny_png_path()
+		filled = fill_pdf(output_path, {"photo": image_path}, image_fields={"photo"})
+		doc = fitz.open(stream=filled, filetype="pdf")
+		try:
+			self.assertGreater(len(doc[0].get_images()), 0)
+			widget = next(doc[0].widgets())
+			self.assertEqual(widget.field_value, "")
+		finally:
+			doc.close()
+
+	def test_fill_pdf_fields_only_renders_image_field(self):
+		fields = [
+			{
+				"field_name": "photo",
+				"field_type": "Image",
+				"page": 0,
+				"x": 72,
+				"y": 72,
+				"width": 120,
+				"height": 120,
+				"font_size": 10,
+			}
+		]
+		pdf_bytes = apply_field_layout(self.template_path, fields)
+		output_path = os.path.join(self.tempdir, "image_fields_only.pdf")
+		with open(output_path, "wb") as handle:
+			handle.write(pdf_bytes)
+
+		image_path = self._tiny_png_path()
+		filled = fill_pdf_fields_only(output_path, {"photo": image_path}, image_fields={"photo"})
+		doc = fitz.open(stream=filled, filetype="pdf")
+		try:
+			self.assertGreater(len(doc[0].get_images()), 0)
+			self.assertEqual(list(doc[0].widgets() or []), [])
+		finally:
+			doc.close()
+
+	def test_fill_template_pdf_uses_image_field_type(self):
+		from pdffiller.utils.pdf_filler import fill_template_pdf
+
+		fields = [
+			{
+				"field_name": "photo",
+				"field_type": "Image",
+				"page": 0,
+				"x": 72,
+				"y": 72,
+				"width": 120,
+				"height": 120,
+				"font_size": 10,
+			}
+		]
+		pdf_bytes = apply_field_layout(self.template_path, fields)
+		template_path = os.path.join(self.tempdir, "image_template.pdf")
+		with open(template_path, "wb") as handle:
+			handle.write(pdf_bytes)
+
+		image_path = self._tiny_png_path()
+		template_doc = SimpleNamespace(
+			pdf_file="/files/image_template.pdf",
+			field_mappings=[
+				SimpleNamespace(
+					pdf_field_name="photo",
+					field_type="Image",
+					source_type="Field Path",
+					source_field="image",
+					jinja_script="",
+					default_value="",
+					date_format="",
+					editable=0,
+				)
+			],
+		)
+		source_doc = SimpleNamespace(
+			meta=SimpleNamespace(get_field=lambda _f: SimpleNamespace(fieldtype="Attach Image")),
+			image=image_path,
+		)
+
+		with unittest.mock.patch("pdffiller.utils.pdf_filler.get_pdf_path", return_value=template_path):
+			filled = fill_template_pdf(template_doc, source_doc, fields_only=True)
+
+		doc = fitz.open(stream=filled, filetype="pdf")
+		try:
+			self.assertGreater(len(doc[0].get_images()), 0)
+		finally:
+			doc.close()
+
 
 if __name__ == "__main__":
 	unittest.main()
