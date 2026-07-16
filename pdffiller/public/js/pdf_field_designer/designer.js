@@ -16,6 +16,7 @@ frappe.provide("pdffiller.designer");
 		{ type: "Select", icon: "list", label: __("Select"), width: 120, height: 20, font_size: 10, options: "Option 1\nOption 2" },
 		{ type: "Small Text", icon: "align-left", label: __("Small Text"), width: 200, height: 40, font_size: 10 },
 		{ type: "Long Text", icon: "align-left", label: __("Long Text"), width: 200, height: 60, font_size: 10 },
+		{ type: "Barcode", icon: "barcode", label: __("Barcode"), width: 180, height: 48, font_size: 10 },
 	];
 
 	const MIN_WIDTH_PT = 20;
@@ -113,6 +114,7 @@ frappe.provide("pdffiller.designer");
 			Currency: "amount",
 			"Small Text": "text",
 			"Long Text": "notes",
+			Barcode: "barcode",
 		};
 		return map[type] || "field";
 	}
@@ -405,6 +407,7 @@ frappe.provide("pdffiller.designer");
 			Text: "Long Text",
 			"Text Editor": "Long Text",
 			"Long Text": "Long Text",
+			Barcode: "Barcode",
 		};
 		return map[fieldtype] || fallback || "Data";
 	}
@@ -509,10 +512,17 @@ frappe.provide("pdffiller.designer");
 
 		return `
 			<div
-				class="pfd-field-overlay${selected}"
+				class="pfd-field-overlay${selected}${field.field_type === "Barcode" ? " pfd-field-overlay--barcode" : ""}"
 				data-field-id="${field.id}"
 				style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;"
 			>
+				${
+					field.field_type === "Barcode"
+						? `<svg class="pfd-barcode-preview" data-barcode-value="${frappe.utils.escape_html(
+								field.default_value || field.source_field || "1234567890"
+						  )}"></svg>`
+						: ""
+				}
 				<span class="pfd-field-label">${label}</span>
 				<span class="pfd-field-meta">${typeLabel} · ${mapLabel}</span>
 				<div class="pfd-resize-handle" data-resize="1"></div>
@@ -565,7 +575,7 @@ frappe.provide("pdffiller.designer");
 			return `<div class="pfd-empty-props">${__("Select a field to edit layout and mapping")}</div>`;
 		}
 
-		const showFont = !["Check", "Select"].includes(field.field_type);
+		const showFont = !["Check", "Select", "Barcode"].includes(field.field_type);
 		const showDateFormat = field.field_type === "Date" || field.date_format;
 		const showOptions = field.field_type === "Select";
 		const showSourceField = field.source_type !== "Jinja Script";
@@ -723,6 +733,7 @@ frappe.provide("pdffiller.designer");
 		`;
 
 		bindEvents(app);
+		renderBarcodePreviews(app);
 	}
 
 	function renderCanvasContainer() {
@@ -730,6 +741,35 @@ frappe.provide("pdffiller.designer");
 		if (!container) return;
 		container.innerHTML = renderCanvas();
 		bindCanvasEvents(container);
+		renderBarcodePreviews(container);
+	}
+
+	function renderBarcodePreviews(root = document) {
+		const previews = root.querySelectorAll(".pfd-barcode-preview");
+		if (!previews.length) return;
+
+		const render = () => {
+			previews.forEach((svg) => {
+				const value = (svg.dataset.barcodeValue || "").trim() || "1234567890";
+				try {
+					JsBarcode(svg, value, {
+						format: "CODE128",
+						displayValue: false,
+						margin: 0,
+						height: 32,
+					});
+				} catch (err) {
+					// ignore invalid preview values
+				}
+			});
+		};
+
+		if (typeof JsBarcode !== "undefined") {
+			render();
+			return;
+		}
+
+		frappe.require("/assets/frappe/js/lib/JsBarcode.all.min.js", render);
 	}
 
 	function renderReferenceFieldsPanel() {
@@ -926,7 +966,7 @@ frappe.provide("pdffiller.designer");
 		});
 
 		panel.querySelector(".pfd-prop-default-value")?.addEventListener("input", (e) => {
-			updateSelectedField({ default_value: e.target.value });
+			updateSelectedField({ default_value: e.target.value }, { refreshCanvas: true });
 		});
 
 		panel.querySelector(".pfd-prop-date-format")?.addEventListener("change", (e) => {

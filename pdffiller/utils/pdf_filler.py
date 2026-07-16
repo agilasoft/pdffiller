@@ -107,12 +107,32 @@ def _draw_checkbox(page, rect, checked: bool) -> None:
 		)
 
 
+def _draw_barcode(page, rect, value: str) -> None:
+	from pdffiller.utils.barcode_renderer import generate_barcode_png
+
+	png_bytes = generate_barcode_png(value)
+	if not png_bytes:
+		return
+
+	page.insert_image(rect, stream=png_bytes, keep_proportion=True)
+
+
+def _get_barcode_fields(template_doc) -> set[str]:
+	return {
+		row.pdf_field_name
+		for row in getattr(template_doc, "field_mappings", []) or []
+		if row.pdf_field_name and (getattr(row, "field_type", None) or "") == "Barcode"
+	}
+
+
 def fill_pdf_fields_only(
 	template_path: str,
 	form_data: dict[str, str],
+	barcode_fields: set[str] | None = None,
 ) -> bytes:
 	import fitz
 
+	barcode_fields = barcode_fields or set()
 	template_doc = fitz.open(template_path)
 	output_doc = fitz.open()
 	try:
@@ -128,7 +148,10 @@ def fill_pdf_fields_only(
 					continue
 
 				widget_rect = widget.rect
-				if widget.field_type_string in ("CheckBox", "Checkbox"):
+				if field_name in barcode_fields:
+					if (value or "").strip():
+						_draw_barcode(output_page, widget_rect, value)
+				elif widget.field_type_string in ("CheckBox", "Checkbox"):
 					_draw_checkbox(output_page, widget_rect, _is_truthy_checkbox_value(value))
 				elif (value or "").strip():
 					fontsize = float(getattr(widget, "text_fontsize", 0) or 10)
@@ -144,10 +167,12 @@ def fill_pdf(
 	template_path: str,
 	form_data: dict[str, str],
 	readonly_fields: set[str] | None = None,
+	barcode_fields: set[str] | None = None,
 ) -> bytes:
 	import fitz
 
 	readonly_fields = readonly_fields or set()
+	barcode_fields = barcode_fields or set()
 	doc = fitz.open(template_path)
 	try:
 		for page in doc:
@@ -156,7 +181,12 @@ def fill_pdf(
 				widget = widgets.get(field_name)
 				if not widget or widget.field_type_string == "RadioButton":
 					continue
-				_set_widget_value(widget, value)
+				if field_name in barcode_fields:
+					_set_widget_value(widget, "")
+					if (value or "").strip():
+						_draw_barcode(page, widget.rect, value)
+				else:
+					_set_widget_value(widget, value)
 				if field_name in readonly_fields:
 					widget.field_flags = widget.field_flags | fitz.PDF_FIELD_IS_READ_ONLY
 				widget.update()
@@ -217,8 +247,9 @@ def fill_template_pdf(
 
 	pdf_path = get_pdf_path(template_doc.pdf_file)
 	form_data = build_form_data(template_doc, source_doc, overrides=overrides)
+	barcode_fields = _get_barcode_fields(template_doc)
 	if fields_only:
-		return fill_pdf_fields_only(pdf_path, form_data)
+		return fill_pdf_fields_only(pdf_path, form_data, barcode_fields=barcode_fields)
 
 	readonly_fields = _get_readonly_fields(template_doc)
-	return fill_pdf(pdf_path, form_data, readonly_fields=readonly_fields)
+	return fill_pdf(pdf_path, form_data, readonly_fields=readonly_fields, barcode_fields=barcode_fields)

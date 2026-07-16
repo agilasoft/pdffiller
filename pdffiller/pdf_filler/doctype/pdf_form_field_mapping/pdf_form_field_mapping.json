@@ -6,6 +6,7 @@
  "engine": "InnoDB",
  "field_order": [
   "pdf_field_name",
+  "field_type",
   "source_type",
   "source_field",
   "jinja_script",
@@ -20,6 +21,12 @@
    "in_list_view": 1,
    "label": "PDF Field Name",
    "reqd": 1
+  },
+  {
+   "fieldname": "field_type",
+   "fieldtype": "Data",
+   "label": "Field Type",
+   "read_only": 1
   },
   {
    "default": "Field Path",
