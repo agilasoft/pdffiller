@@ -117,22 +117,54 @@ def _draw_barcode(page, rect, value: str) -> None:
 	page.insert_image(rect, stream=png_bytes, keep_proportion=True)
 
 
-def _get_barcode_fields(template_doc) -> set[str]:
+def _draw_image(page, rect, value: str) -> None:
+	from pdffiller.utils.image_renderer import resolve_image_bytes
+
+	image_bytes = resolve_image_bytes(value)
+	if not image_bytes:
+		return
+
+	page.insert_image(rect, stream=image_bytes, keep_proportion=True)
+
+
+def _get_fields_by_type(template_doc, field_type: str) -> set[str]:
 	return {
 		row.pdf_field_name
 		for row in getattr(template_doc, "field_mappings", []) or []
-		if row.pdf_field_name and (getattr(row, "field_type", None) or "") == "Barcode"
+		if row.pdf_field_name and (getattr(row, "field_type", None) or "") == field_type
 	}
+
+
+def _get_barcode_fields(template_doc) -> set[str]:
+	return _get_fields_by_type(template_doc, "Barcode")
+
+
+def _get_image_fields(template_doc) -> set[str]:
+	return _get_fields_by_type(template_doc, "Image")
+
+
+def _draw_special_field(page, rect, value: str, field_name: str, barcode_fields, image_fields) -> bool:
+	if field_name in barcode_fields:
+		if (value or "").strip():
+			_draw_barcode(page, rect, value)
+		return True
+	if field_name in image_fields:
+		if (value or "").strip():
+			_draw_image(page, rect, value)
+		return True
+	return False
 
 
 def fill_pdf_fields_only(
 	template_path: str,
 	form_data: dict[str, str],
 	barcode_fields: set[str] | None = None,
+	image_fields: set[str] | None = None,
 ) -> bytes:
 	import fitz
 
 	barcode_fields = barcode_fields or set()
+	image_fields = image_fields or set()
 	template_doc = fitz.open(template_path)
 	output_doc = fitz.open()
 	try:
@@ -148,10 +180,11 @@ def fill_pdf_fields_only(
 					continue
 
 				widget_rect = widget.rect
-				if field_name in barcode_fields:
-					if (value or "").strip():
-						_draw_barcode(output_page, widget_rect, value)
-				elif widget.field_type_string in ("CheckBox", "Checkbox"):
+				if _draw_special_field(
+					output_page, widget_rect, value, field_name, barcode_fields, image_fields
+				):
+					continue
+				if widget.field_type_string in ("CheckBox", "Checkbox"):
 					_draw_checkbox(output_page, widget_rect, _is_truthy_checkbox_value(value))
 				elif (value or "").strip():
 					fontsize = float(getattr(widget, "text_fontsize", 0) or 10)
@@ -168,11 +201,13 @@ def fill_pdf(
 	form_data: dict[str, str],
 	readonly_fields: set[str] | None = None,
 	barcode_fields: set[str] | None = None,
+	image_fields: set[str] | None = None,
 ) -> bytes:
 	import fitz
 
 	readonly_fields = readonly_fields or set()
 	barcode_fields = barcode_fields or set()
+	image_fields = image_fields or set()
 	doc = fitz.open(template_path)
 	try:
 		for page in doc:
@@ -181,10 +216,11 @@ def fill_pdf(
 				widget = widgets.get(field_name)
 				if not widget or widget.field_type_string == "RadioButton":
 					continue
-				if field_name in barcode_fields:
+				if field_name in barcode_fields or field_name in image_fields:
 					_set_widget_value(widget, "")
-					if (value or "").strip():
-						_draw_barcode(page, widget.rect, value)
+					_draw_special_field(
+						page, widget.rect, value, field_name, barcode_fields, image_fields
+					)
 				else:
 					_set_widget_value(widget, value)
 				if field_name in readonly_fields:
@@ -248,8 +284,20 @@ def fill_template_pdf(
 	pdf_path = get_pdf_path(template_doc.pdf_file)
 	form_data = build_form_data(template_doc, source_doc, overrides=overrides)
 	barcode_fields = _get_barcode_fields(template_doc)
+	image_fields = _get_image_fields(template_doc)
 	if fields_only:
-		return fill_pdf_fields_only(pdf_path, form_data, barcode_fields=barcode_fields)
+		return fill_pdf_fields_only(
+			pdf_path,
+			form_data,
+			barcode_fields=barcode_fields,
+			image_fields=image_fields,
+		)
 
 	readonly_fields = _get_readonly_fields(template_doc)
-	return fill_pdf(pdf_path, form_data, readonly_fields=readonly_fields, barcode_fields=barcode_fields)
+	return fill_pdf(
+		pdf_path,
+		form_data,
+		readonly_fields=readonly_fields,
+		barcode_fields=barcode_fields,
+		image_fields=image_fields,
+	)
