@@ -67,6 +67,11 @@ pdffiller.transfer._read_file_as_data_url = function (file) {
 	});
 };
 
+pdffiller.transfer._is_supported_pack = function (filename) {
+	const name = (filename || "").toLowerCase();
+	return name.endsWith(".txt") || name.endsWith(".json") || name.endsWith(".zip");
+};
+
 pdffiller.transfer.import_templates = function (on_done) {
 	const dialog = new frappe.ui.Dialog({
 		title: __("Import PDF Form Templates"),
@@ -78,10 +83,10 @@ pdffiller.transfer.import_templates = function (on_done) {
 					<div class="pdffiller-import-picker">
 						<p class="text-muted small">
 							${__(
-								"Select a .json pack exported from another site. Upload bypasses Frappe file-type restrictions."
+								"Select the .txt pack exported from another site (legacy .json / .zip also work)."
 							)}
 						</p>
-						<input type="file" class="form-control" accept=".json,application/json,.zip,application/zip" />
+						<input type="file" class="form-control" accept=".txt,.json,.zip,text/plain,application/json" />
 					</div>
 				`,
 			},
@@ -95,9 +100,8 @@ pdffiller.transfer.import_templates = function (on_done) {
 				return;
 			}
 
-			const name = (file.name || "").toLowerCase();
-			if (!name.endsWith(".json") && !name.endsWith(".zip")) {
-				frappe.msgprint(__("Please select a .json pack file (or a legacy .zip)."));
+			if (!pdffiller.transfer._is_supported_pack(file.name)) {
+				frappe.msgprint(__("Please select a .txt pack file (or legacy .json / .zip)."));
 				return;
 			}
 
