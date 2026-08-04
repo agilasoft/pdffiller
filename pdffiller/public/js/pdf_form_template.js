@@ -3,6 +3,22 @@
 
 frappe.ui.form.on("PDF Form Template", {
 	refresh(frm) {
+		frm.add_custom_button(__("Import"), function () {
+			pdffiller.transfer.import_templates(function (summary) {
+				const title = frm.doc.title;
+				const touched =
+					summary &&
+					(summary.results || []).some(
+						(row) =>
+							row.title === title &&
+							(row.status === "created" || row.status === "updated")
+					);
+				if (touched && !frm.is_new()) {
+					frm.reload_doc();
+				}
+			});
+		});
+
 		if (!frm.is_new()) {
 			if (frm.doc.pdf_file) {
 				frm.add_custom_button(__("Design Fields"), function () {

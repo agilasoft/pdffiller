@@ -22,7 +22,6 @@ fixtures = [
 ]
 
 doctype_js = {"PDF Form Template": "public/js/pdf_form_template.js"}
-doctype_list_js = {"PDF Form Template": "public/js/pdf_form_template_list.js"}
 
 extend_bootinfo = "pdffiller.boot.extend_bootinfo"
 after_install = "pdffiller.install.after_install"

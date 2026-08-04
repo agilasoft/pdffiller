@@ -54,37 +54,74 @@ pdffiller.transfer.show_import_summary = function (summary) {
 	});
 };
 
+pdffiller.transfer._read_file_as_data_url = function (file) {
+	return new Promise(function (resolve, reject) {
+		const reader = new FileReader();
+		reader.onload = function () {
+			resolve(reader.result);
+		};
+		reader.onerror = function () {
+			reject(reader.error || new Error("Failed to read file"));
+		};
+		reader.readAsDataURL(file);
+	});
+};
+
 pdffiller.transfer.import_templates = function (on_done) {
 	const dialog = new frappe.ui.Dialog({
 		title: __("Import PDF Form Templates"),
 		fields: [
 			{
-				fieldtype: "Attach",
-				fieldname: "zip_file",
-				label: __("ZIP Pack"),
-				reqd: 1,
-				description: __("Select a .zip file exported from another site."),
+				fieldtype: "HTML",
+				fieldname: "file_picker",
+				options: `
+					<div class="pdffiller-import-picker">
+						<p class="text-muted small">
+							${__(
+								"Select a .json pack exported from another site. Upload bypasses Frappe file-type restrictions."
+							)}
+						</p>
+						<input type="file" class="form-control" accept=".json,application/json,.zip,application/zip" />
+					</div>
+				`,
 			},
 		],
 		primary_action_label: __("Import"),
-		primary_action(values) {
-			if (!values.zip_file) {
-				frappe.msgprint(__("Please attach a ZIP file."));
+		async primary_action() {
+			const input = dialog.$wrapper.find("input[type=file]")[0];
+			const file = input && input.files && input.files[0];
+			if (!file) {
+				frappe.msgprint(__("Please select a pack file."));
 				return;
 			}
+
+			const name = (file.name || "").toLowerCase();
+			if (!name.endsWith(".json") && !name.endsWith(".zip")) {
+				frappe.msgprint(__("Please select a .json pack file (or a legacy .zip)."));
+				return;
+			}
+
 			dialog.hide();
-			frappe.call({
-				method: "pdffiller.api.transfer.import_templates",
-				args: { file_url: values.zip_file },
-				freeze: true,
-				freeze_message: __("Importing templates..."),
-				callback(r) {
-					pdffiller.transfer.show_import_summary(r.message || {});
-					if (typeof on_done === "function") {
-						on_done(r.message);
-					}
-				},
-			});
+			frappe.dom.freeze(__("Importing templates..."));
+			try {
+				const data_url = await pdffiller.transfer._read_file_as_data_url(file);
+				const r = await frappe.call({
+					method: "pdffiller.api.transfer.import_templates",
+					args: { file_content: data_url },
+				});
+				pdffiller.transfer.show_import_summary(r.message || {});
+				if (typeof on_done === "function") {
+					on_done(r.message);
+				}
+			} catch (err) {
+				frappe.msgprint({
+					title: __("Import Failed"),
+					indicator: "red",
+					message: (err && err.message) || __("Could not import the pack file."),
+				});
+			} finally {
+				frappe.dom.unfreeze();
+			}
 		},
 	});
 	dialog.show();

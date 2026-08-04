@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import os
@@ -61,20 +62,9 @@ def _parse_template_names(templates) -> list[str] | None:
 	frappe.throw(_("Invalid templates argument"))
 
 
-def _safe_pdf_filename(title: str, used: set[str]) -> str:
+def _safe_download_name(title: str) -> str:
 	base = re.sub(r"[^\w\-]+", "_", (title or "template").strip(), flags=re.UNICODE)
-	base = base.strip("_")[:80] or "template"
-	name = f"{base}.pdf"
-	if name not in used:
-		used.add(name)
-		return name
-	index = 2
-	while True:
-		candidate = f"{base}_{index}.pdf"
-		if candidate not in used:
-			used.add(candidate)
-			return candidate
-		index += 1
+	return (base.strip("_")[:80] or "template")
 
 
 def _serialize_mapping(row) -> dict[str, Any]:
@@ -94,8 +84,13 @@ def _read_pdf_bytes(file_url: str) -> bytes:
 		return handle.read()
 
 
-def build_export_zip(template_names: list[str] | None = None) -> tuple[bytes, str]:
-	"""Build a portable ZIP pack. Returns (zip_bytes, download_filename_without_ext)."""
+def build_export_pack(template_names: list[str] | None = None) -> tuple[bytes, str]:
+	"""Build a portable JSON pack with embedded base64 PDFs.
+
+	Returns (json_bytes, download_filename_without_ext).
+	JSON is used instead of ZIP so Frappe's Attach / allowed_file_extensions
+	do not block cross-site import.
+	"""
 	filters = {}
 	if template_names is not None:
 		filters["name"] = ("in", template_names)
@@ -119,42 +114,37 @@ def build_export_zip(template_names: list[str] | None = None) -> tuple[bytes, st
 		"exported_at": str(now_datetime()),
 		"templates": [],
 	}
-	used_pdf_names: set[str] = set()
-	buffer = io.BytesIO()
 
-	with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-		for name in names:
-			doc = frappe.get_doc("PDF Form Template", name)
-			if not doc.pdf_file:
-				frappe.throw(_("Template {0} has no PDF attached").format(name))
+	for name in names:
+		doc = frappe.get_doc("PDF Form Template", name)
+		if not doc.pdf_file:
+			frappe.throw(_("Template {0} has no PDF attached").format(name))
 
-			pdf_filename = _safe_pdf_filename(doc.title, used_pdf_names)
-			payload = _serialize_template(doc)
-			payload["pdf_filename"] = pdf_filename
-			manifest["templates"].append(payload)
+		payload = _serialize_template(doc)
+		payload["pdf_base64"] = base64.b64encode(_read_pdf_bytes(doc.pdf_file)).decode("ascii")
+		manifest["templates"].append(payload)
 
-			archive.writestr(f"pdfs/{pdf_filename}", _read_pdf_bytes(doc.pdf_file))
-
-		archive.writestr(
-			"manifest.json",
-			json.dumps(manifest, indent=2, ensure_ascii=False),
-		)
+	content = json.dumps(manifest, indent=2, ensure_ascii=False).encode("utf-8")
 
 	if len(names) == 1:
-		download_name = _safe_pdf_filename(names[0], set()).removesuffix(".pdf")
+		download_name = _safe_download_name(names[0])
 	else:
 		download_name = f"pdffiller-templates-{now_datetime().strftime('%Y%m%d')}"
 
-	return buffer.getvalue(), download_name
+	return content, download_name
+
+
+# Backwards-compatible alias used by older tests / callers.
+build_export_zip = build_export_pack
 
 
 @frappe.whitelist()
 def export_templates(templates=None):
-	"""Download a ZIP pack of one or more PDF Form Templates."""
+	"""Download a JSON pack of one or more PDF Form Templates."""
 	_ensure_permission("read")
 	names = _parse_template_names(templates)
-	content, filename = build_export_zip(names)
-	provide_binary_file(filename, "zip", content)
+	content, filename = build_export_pack(names)
+	provide_binary_file(filename, "json", content)
 
 
 def _create_pdf_file(title: str, pdf_bytes: bytes) -> str:
@@ -256,22 +246,35 @@ def _import_one_template(payload: dict, pdf_bytes: bytes) -> dict[str, Any]:
 	}
 
 
-def _load_zip_bytes(file_url: str | None = None, file_content=None) -> bytes:
-	if file_content:
-		if isinstance(file_content, str):
-			# data URI or raw base64
-			if "," in file_content and file_content.strip().startswith("data:"):
-				file_content = file_content.split(",", 1)[1]
-			import base64
+def _decode_uploaded_content(file_content) -> bytes:
+	if isinstance(file_content, (bytes, bytearray)):
+		return bytes(file_content)
+	if isinstance(file_content, str):
+		text = file_content.strip()
+		if text.startswith("data:") and "," in text:
+			header, payload = text.split(",", 1)
+			if ";base64" in header.lower():
+				return base64.b64decode(payload)
+			return payload.encode("utf-8")
+		# Plain JSON pasted/sent as text.
+		if text.startswith("{") or text.startswith("["):
+			return text.encode("utf-8")
+		# Raw base64 of the whole pack.
+		try:
+			return base64.b64decode(text, validate=True)
+		except Exception:
+			return text.encode("utf-8")
+	frappe.throw(_("Invalid file content"))
 
-			return base64.b64decode(file_content)
-		if isinstance(file_content, (bytes, bytearray)):
-			return bytes(file_content)
+
+def _load_pack_bytes(file_url: str | None = None, file_content=None) -> bytes:
+	if file_content:
+		return _decode_uploaded_content(file_content)
 
 	if file_url:
 		path = frappe.utils.file_manager.get_file_path(file_url)
 		if not path or not os.path.exists(path):
-			frappe.throw(_("Uploaded ZIP file not found on disk"))
+			frappe.throw(_("Uploaded pack file not found on disk"))
 		with open(path, "rb") as handle:
 			return handle.read()
 
@@ -279,14 +282,101 @@ def _load_zip_bytes(file_url: str | None = None, file_content=None) -> bytes:
 	if uploaded:
 		return uploaded if isinstance(uploaded, (bytes, bytearray)) else bytes(uploaded)
 
-	frappe.throw(_("ZIP file is required"))
+	frappe.throw(_("Pack file is required"))
+
+
+def _process_manifest(manifest: dict) -> dict[str, Any]:
+	if not isinstance(manifest, dict) or not isinstance(manifest.get("templates"), list):
+		frappe.throw(_("Invalid pack structure"))
+
+	version = manifest.get("format_version")
+	if version is not None and int(version) > FORMAT_VERSION:
+		frappe.throw(
+			_("Unsupported pack format version {0}. This site supports up to {1}.").format(
+				version, FORMAT_VERSION
+			)
+		)
+
+	results: list[dict[str, Any]] = []
+	pdf_lookup = manifest.get("_pdf_bytes_by_filename") or {}
+
+	for payload in manifest["templates"]:
+		if not isinstance(payload, dict):
+			results.append({"status": "error", "title": None, "message": _("Invalid template entry")})
+			continue
+
+		pdf_bytes = None
+		if payload.get("pdf_base64"):
+			try:
+				pdf_bytes = base64.b64decode(payload["pdf_base64"])
+			except Exception:
+				results.append(
+					{
+						"status": "error",
+						"title": payload.get("title"),
+						"message": _("Invalid pdf_base64 data"),
+					}
+				)
+				continue
+		elif payload.get("pdf_filename"):
+			pdf_filename = os.path.basename(str(payload["pdf_filename"]))
+			pdf_bytes = pdf_lookup.get(pdf_filename)
+			if pdf_bytes is None:
+				results.append(
+					{
+						"status": "error",
+						"title": payload.get("title"),
+						"message": _("PDF file '{0}' missing from pack").format(pdf_filename),
+					}
+				)
+				continue
+		else:
+			results.append(
+				{
+					"status": "error",
+					"title": payload.get("title"),
+					"message": _("Missing PDF data"),
+				}
+			)
+			continue
+
+		# Do not persist base64 onto the DocType payload helpers.
+		clean_payload = {key: value for key, value in payload.items() if key != "pdf_base64"}
+
+		try:
+			results.append(_import_one_template(clean_payload, pdf_bytes))
+		except Exception as exc:
+			frappe.log_error(title="PDF Form Template import failed")
+			results.append(
+				{
+					"status": "error",
+					"title": payload.get("title"),
+					"message": str(exc),
+				}
+			)
+
+	return {
+		"created": sum(1 for row in results if row.get("status") == "created"),
+		"updated": sum(1 for row in results if row.get("status") == "updated"),
+		"errors": sum(1 for row in results if row.get("status") == "error"),
+		"results": results,
+	}
+
+
+def import_templates_from_json(pack_bytes: bytes) -> dict[str, Any]:
+	try:
+		manifest = json.loads(pack_bytes.decode("utf-8"))
+	except (UnicodeDecodeError, json.JSONDecodeError):
+		frappe.throw(_("Invalid JSON pack file"))
+	return _process_manifest(manifest)
 
 
 def import_templates_from_zip(zip_bytes: bytes) -> dict[str, Any]:
+	"""Import legacy ZIP packs (pre-JSON export format)."""
 	try:
 		archive = zipfile.ZipFile(io.BytesIO(zip_bytes))
 	except zipfile.BadZipFile:
-		frappe.throw(_("Invalid ZIP file"))
+		frappe.throw(_("Invalid pack file. Expected a .json export (or legacy .zip)."))
 
 	with archive:
 		try:
@@ -299,75 +389,40 @@ def import_templates_from_zip(zip_bytes: bytes) -> dict[str, Any]:
 		except json.JSONDecodeError:
 			frappe.throw(_("Invalid manifest.json"))
 
-		if not isinstance(manifest, dict) or not isinstance(manifest.get("templates"), list):
-			frappe.throw(_("Invalid manifest structure"))
-
-		version = manifest.get("format_version")
-		if version is not None and int(version) > FORMAT_VERSION:
-			frappe.throw(
-				_("Unsupported pack format version {0}. This site supports up to {1}.").format(
-					version, FORMAT_VERSION
-				)
-			)
-
-		results: list[dict[str, Any]] = []
-		for payload in manifest["templates"]:
-			if not isinstance(payload, dict):
-				results.append(
-					{"status": "error", "title": None, "message": _("Invalid template entry")}
-				)
+		pdf_lookup: dict[str, bytes] = {}
+		for info in archive.infolist():
+			if info.is_dir():
 				continue
-
-			pdf_filename = payload.get("pdf_filename")
-			if not pdf_filename:
-				results.append(
-					{
-						"status": "error",
-						"title": payload.get("title"),
-						"message": _("Missing pdf_filename"),
-					}
-				)
+			if not info.filename.startswith("pdfs/"):
 				continue
+			name = os.path.basename(info.filename)
+			if name:
+				pdf_lookup[name] = archive.read(info)
 
-			# Prevent zip-slip: only allow basename under pdfs/
-			pdf_filename = os.path.basename(str(pdf_filename))
-			member = f"pdfs/{pdf_filename}"
-			try:
-				pdf_bytes = archive.read(member)
-			except KeyError:
-				results.append(
-					{
-						"status": "error",
-						"title": payload.get("title"),
-						"message": _("PDF file '{0}' missing from pack").format(pdf_filename),
-					}
-				)
-				continue
+		if isinstance(manifest, dict):
+			manifest["_pdf_bytes_by_filename"] = pdf_lookup
 
-			try:
-				results.append(_import_one_template(payload, pdf_bytes))
-			except Exception as exc:
-				frappe.log_error(title="PDF Form Template import failed")
-				results.append(
-					{
-						"status": "error",
-						"title": payload.get("title"),
-						"message": str(exc),
-					}
-				)
+		return _process_manifest(manifest)
 
-	summary = {
-		"created": sum(1 for row in results if row.get("status") == "created"),
-		"updated": sum(1 for row in results if row.get("status") == "updated"),
-		"errors": sum(1 for row in results if row.get("status") == "error"),
-		"results": results,
-	}
-	return summary
+
+def import_templates_from_pack(pack_bytes: bytes) -> dict[str, Any]:
+	"""Auto-detect JSON (preferred) or legacy ZIP packs."""
+	stripped = pack_bytes.lstrip()
+	if stripped.startswith(b"{") or stripped.startswith(b"["):
+		return import_templates_from_json(pack_bytes)
+	if stripped.startswith(b"PK"):
+		return import_templates_from_zip(pack_bytes)
+	# Maybe the client sent base64 of JSON without decoding.
+	try:
+		decoded = base64.b64decode(pack_bytes, validate=True)
+	except Exception:
+		frappe.throw(_("Invalid pack file. Expected a .json export."))
+	return import_templates_from_pack(decoded)
 
 
 @frappe.whitelist()
 def import_templates(file_url=None, file_content=None):
-	"""Import PDF Form Templates from an exported ZIP pack."""
+	"""Import PDF Form Templates from an exported JSON (or legacy ZIP) pack."""
 	_ensure_permission("write")
-	zip_bytes = _load_zip_bytes(file_url=file_url, file_content=file_content)
-	return import_templates_from_zip(zip_bytes)
+	pack_bytes = _load_pack_bytes(file_url=file_url, file_content=file_content)
+	return import_templates_from_pack(pack_bytes)
