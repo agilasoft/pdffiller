@@ -251,6 +251,8 @@ frappe.provide("pdffiller.designer");
 				if (state.reference_doctype && pdffiller.forms && pdffiller.forms.clear_cache) {
 					pdffiller.forms.clear_cache(state.reference_doctype);
 				}
+				// Reload from disk so the canvas matches what print will use.
+				loadContext(state.templateName);
 			},
 		});
 	}
@@ -276,6 +278,8 @@ frappe.provide("pdffiller.designer");
 			date_format: field.date_format || "",
 			editable: field.editable ? 1 : 0,
 			options: field.options || "",
+			text_maxlen: field.text_maxlen || 0,
+			comb: field.comb ? 1 : 0,
 		}));
 	}
 

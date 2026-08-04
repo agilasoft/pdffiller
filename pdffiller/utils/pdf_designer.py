@@ -40,6 +40,8 @@ DEFAULT_MAPPING = {
 	"date_format": "",
 	"editable": 0,
 	"options": "",
+	"text_maxlen": 0,
+	"comb": 0,
 }
 
 DATE_FORMATS = ["", "%d-%m-%Y", "%m/%d/%Y", "%Y-%m-%d", "%d/%m/%Y"]
@@ -117,6 +119,7 @@ def list_field_layout(pdf_path: str) -> list[dict]:
 					continue
 				rect = widget.rect
 				field_type = _widget_type_label(widget)
+				flags = int(getattr(widget, "field_flags", 0) or 0)
 				fields.append(
 					{
 						"field_name": widget.field_name,
@@ -129,6 +132,8 @@ def list_field_layout(pdf_path: str) -> list[dict]:
 						"font_size": float(getattr(widget, "text_fontsize", 0) or 10),
 						"options": _widget_options(widget) if field_type == "Select" else "",
 						**DEFAULT_MAPPING,
+						"text_maxlen": int(getattr(widget, "text_maxlen", 0) or 0),
+						"comb": 1 if flags & fitz.PDF_TX_FIELD_IS_COMB else 0,
 					}
 				)
 	finally:
@@ -215,9 +220,20 @@ def _validate_field_layout(fields: list[dict]) -> list[dict]:
 		if page < 0:
 			frappe.throw(_("Invalid page number for field {0}").format(field_name))
 		min_height = 10 if field_type == "Check" else 12
-		min_width = 12 if field_type == "Check" else 20
+		# Allow character-box widgets (BIR comb fields are ~12pt wide).
+		min_width = 12 if field_type == "Check" else 10
 		if width < min_width or height < min_height:
 			frappe.throw(_("Field {0} is too small").format(field_name))
+
+		try:
+			text_maxlen = int(field.get("text_maxlen") or 0)
+			comb = int(field.get("comb") or 0)
+		except (TypeError, ValueError):
+			frappe.throw(_("Invalid text_maxlen/comb value in field {0}").format(field_name))
+		if text_maxlen < 0:
+			frappe.throw(_("text_maxlen cannot be negative for field {0}").format(field_name))
+		if comb and not text_maxlen:
+			frappe.throw(_("Comb fields require text_maxlen for field {0}").format(field_name))
 
 		validated.append(
 			{
@@ -236,6 +252,8 @@ def _validate_field_layout(fields: list[dict]) -> list[dict]:
 				"date_format": date_format,
 				"editable": editable,
 				"options": field.get("options") or "",
+				"text_maxlen": text_maxlen,
+				"comb": 1 if comb else 0,
 			}
 		)
 
@@ -270,6 +288,11 @@ def _apply_widget(field: dict, page) -> None:
 		widget.field_type = fitz.PDF_WIDGET_TYPE_TEXT
 		widget.text_fontsize = field["font_size"]
 		widget.field_value = ""
+		text_maxlen = int(field.get("text_maxlen") or 0)
+		if text_maxlen > 0:
+			widget.text_maxlen = text_maxlen
+		if int(field.get("comb") or 0) and text_maxlen > 0:
+			widget.field_flags = int(widget.field_flags or 0) | fitz.PDF_TX_FIELD_IS_COMB
 
 	page.add_widget(widget)
 
@@ -299,6 +322,18 @@ def apply_field_layout(pdf_path: str, fields: list[dict]) -> bytes:
 
 
 def save_template_pdf(template_doc, pdf_bytes: bytes) -> None:
+	"""Overwrite the exact PDF file the template (and print) reference.
+
+	Do not use File.save_file(overwrite=True) alone: it rebuilds file_url from
+	file_name, which often differs from the attached file_url after Frappe's
+	content-hash dedupe. That writes the redesigned PDF to a different path
+	while print keeps reading the old URL — so Design Fields appears to save
+	but has no effect on actual output.
+	"""
+	import os
+
+	from frappe.utils.file_manager import get_content_hash
+
 	file_url = template_doc.pdf_file
 	if not file_url:
 		frappe.throw(_("PDF file is not attached"))
@@ -307,8 +342,21 @@ def save_template_pdf(template_doc, pdf_bytes: bytes) -> None:
 	if not file_name:
 		frappe.throw(_("Attached PDF file record not found"))
 
-	file_doc = frappe.get_doc("File", file_name)
-	file_doc.save_file(content=pdf_bytes, overwrite=True)
+	pdf_path = get_pdf_path(file_url)
+	with open(pdf_path, "wb") as handle:
+		handle.write(pdf_bytes)
+		handle.flush()
+		os.fsync(handle.fileno())
+
+	frappe.db.set_value(
+		"File",
+		file_name,
+		{
+			"file_size": len(pdf_bytes),
+			"content_hash": get_content_hash(pdf_bytes),
+		},
+		update_modified=False,
+	)
 
 
 def sync_field_mappings(template_doc, fields: list[dict]) -> tuple[int, int]:

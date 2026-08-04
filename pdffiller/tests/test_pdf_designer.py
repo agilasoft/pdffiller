@@ -14,6 +14,7 @@ from pdffiller.utils.pdf_designer import (
 	get_page_previews,
 	list_field_layout,
 	merge_fields_with_mappings,
+	save_template_pdf,
 	sync_field_mappings,
 )
 from pdffiller.utils.pdf_filler import _checkbox_is_checked, fill_pdf, list_acroform_fields
@@ -256,6 +257,45 @@ class TestPdfDesigner(unittest.TestCase):
 		self.assertEqual(row["source_field"], "grand_total")
 		self.assertEqual(row["default_value"], "0")
 		self.assertEqual(row["field_type"], "Currency")
+
+	def test_save_template_pdf_overwrites_attached_path(self):
+		"""Design save must update the exact file_url path print reads."""
+		attached_path = os.path.join(self.tempdir, "template-abc123.pdf")
+		_make_plain_pdf(attached_path)
+
+		fields = [
+			{
+				"field_name": "customer_name",
+				"field_type": "Data",
+				"page": 0,
+				"x": 120,
+				"y": 200,
+				"width": 180,
+				"height": 22,
+				"font_size": 10,
+			}
+		]
+		pdf_bytes = apply_field_layout(attached_path, fields)
+		template_doc = SimpleNamespace(pdf_file="/files/template-abc123.pdf")
+
+		with patch("pdffiller.utils.pdf_designer.frappe.db.get_value", return_value="FILE-001"), patch(
+			"pdffiller.utils.pdf_designer.frappe.db.set_value"
+		) as mock_set_value, patch(
+			"pdffiller.utils.pdf_designer.get_pdf_path", return_value=attached_path
+		), patch("frappe.utils.file_manager.get_content_hash", return_value="deadbeef"):
+			save_template_pdf(template_doc, pdf_bytes)
+
+		layout = list_field_layout(attached_path)
+		self.assertEqual(len(layout), 1)
+		self.assertEqual(layout[0]["field_name"], "customer_name")
+		self.assertAlmostEqual(layout[0]["x"], 120, places=1)
+		self.assertAlmostEqual(layout[0]["y"], 200, places=1)
+		mock_set_value.assert_called_once()
+		args = mock_set_value.call_args
+		self.assertEqual(args.args[0], "File")
+		self.assertEqual(args.args[1], "FILE-001")
+		self.assertEqual(args.args[2]["file_size"], len(pdf_bytes))
+		self.assertEqual(args.args[2]["content_hash"], "deadbeef")
 
 	@patch("pdffiller.api.designer.save_template_pdf")
 	@patch("pdffiller.api.designer.apply_field_layout")

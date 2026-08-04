@@ -1,3 +1,6 @@
+// Copyright (c) 2026, Agilasoft Cloud Technologies Inc. and contributors
+// For license information, please see license.txt
+
 frappe.ui.form.on("PDF Form Template", {
 	refresh(frm) {
 		if (!frm.is_new()) {
@@ -8,6 +11,9 @@ frappe.ui.form.on("PDF Form Template", {
 			}
 			frm.add_custom_button(__("Scan PDF Fields"), function () {
 				scan_pdf_fields(frm);
+			});
+			frm.add_custom_button(__("Export"), function () {
+				pdffiller.transfer.export_templates([frm.doc.name]);
 			});
 		}
 	},

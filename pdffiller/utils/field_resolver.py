@@ -13,10 +13,19 @@ from frappe.utils import cstr, flt, formatdate, getdate
 JINJA_MARKERS = re.compile(r"(\{\{|\{%)")
 
 
+class _JinjaFrappeProxy:
+	"""Jinja `frappe` helper: utils (fmt_money, formatdate) plus app APIs (db, get_doc)."""
+
+	def __getattr__(self, name: str):
+		if hasattr(frappe.utils, name):
+			return getattr(frappe.utils, name)
+		return getattr(frappe, name)
+
+
 def get_jinja_context(source_doc) -> dict[str, Any]:
 	return {
 		"doc": source_doc,
-		"frappe": frappe.utils,
+		"frappe": _JinjaFrappeProxy(),
 	}
 
 

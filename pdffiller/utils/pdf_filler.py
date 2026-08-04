@@ -66,18 +66,99 @@ def _set_widget_value(widget, value: str) -> None:
 		widget.field_value = value or ""
 
 
-def _draw_text_field(page, rect, text: str, fontsize: float) -> None:
+def _widget_matches_radio(widget, field_name: str, export_value: str) -> bool:
+	if widget.field_name != field_name:
+		return False
+	states = (widget.button_states() or {}).get("normal", [])
+	return bool(export_value) and export_value in states and export_value != "Off"
+
+
+def _set_radio_field(page, field_name: str, export_value: str) -> bool:
+	"""Select the radio widget whose on-state matches export_value."""
+	export_value = (export_value or "").strip()
+	if not export_value:
+		return False
+	for widget in page.widgets() or []:
+		if not _widget_matches_radio(widget, field_name, export_value):
+			continue
+		widget.field_value = export_value
+		widget.update()
+		return True
+	return False
+
+
+def _draw_radio_selection(page, widgets, field_name: str, export_value: str) -> None:
+	"""Stamp an X on the selected radio option (fields-only / flattened output)."""
 	import fitz
 
+	export_value = (export_value or "").strip()
+	if not export_value:
+		return
+	for widget in widgets:
+		if not _widget_matches_radio(widget, field_name, export_value):
+			continue
+		page.insert_textbox(
+			widget.rect,
+			"X",
+			fontname="hebo",
+			fontsize=max(min(widget.rect.height, widget.rect.width) - 1, 6),
+			color=(0, 0, 0),
+			align=fitz.TEXT_ALIGN_CENTER,
+		)
+		return
+
+
+def _draw_text_field(
+	page,
+	rect,
+	text: str,
+	fontsize: float,
+	*,
+	comb_slots: int = 0,
+) -> None:
+	import fitz
+
+	text = str(text or "")
+	if not text.strip():
+		return
+
 	fontsize = max(fontsize, 6)
+	if comb_slots and comb_slots > 0:
+		slot_w = rect.width / comb_slots
+		chars = list(text[:comb_slots])
+		for idx, char in enumerate(chars):
+			if not str(char).strip():
+				continue
+			slot = fitz.Rect(rect.x0 + idx * slot_w, rect.y0, rect.x0 + (idx + 1) * slot_w, rect.y1)
+			page.insert_textbox(
+				slot,
+				char,
+				fontname="helv",
+				fontsize=min(fontsize, max(slot.height - 2, 6)),
+				color=(0, 0, 0),
+				align=fitz.TEXT_ALIGN_CENTER,
+			)
+		return
+
+	align = fitz.TEXT_ALIGN_CENTER if len(text.strip()) <= 8 else fitz.TEXT_ALIGN_LEFT
 	page.insert_textbox(
 		rect,
 		text,
 		fontname="helv",
 		fontsize=fontsize,
 		color=(0, 0, 0),
-		align=fitz.TEXT_ALIGN_LEFT,
+		align=align,
 	)
+
+
+def _widget_comb_slots(widget) -> int:
+	import fitz
+
+	flags = int(getattr(widget, "field_flags", 0) or 0)
+	maxlen = int(getattr(widget, "text_maxlen", 0) or 0)
+	if maxlen > 0 and flags & fitz.PDF_TX_FIELD_IS_COMB:
+		return maxlen
+	return 0
 
 
 def _draw_checkbox(page, rect, checked: bool) -> None:
@@ -173,10 +254,21 @@ def fill_pdf_fields_only(
 			rect = template_page.rect
 			output_page = output_doc.new_page(width=rect.width, height=rect.height)
 
-			widgets = {widget.field_name: widget for widget in (template_page.widgets() or [])}
+			page_widgets = list(template_page.widgets() or [])
+			widgets = {widget.field_name: widget for widget in page_widgets}
+			radio_done: set[str] = set()
 			for field_name, value in form_data.items():
+				if field_name in radio_done:
+					continue
+				# Radio groups share a field name across multiple widgets.
+				radio_widgets = [w for w in page_widgets if w.field_name == field_name and w.field_type_string == "RadioButton"]
+				if radio_widgets:
+					_draw_radio_selection(output_page, radio_widgets, field_name, value)
+					radio_done.add(field_name)
+					continue
+
 				widget = widgets.get(field_name)
-				if not widget or widget.field_type_string == "RadioButton":
+				if not widget:
 					continue
 
 				widget_rect = widget.rect
@@ -188,7 +280,13 @@ def fill_pdf_fields_only(
 					_draw_checkbox(output_page, widget_rect, _is_truthy_checkbox_value(value))
 				elif (value or "").strip():
 					fontsize = float(getattr(widget, "text_fontsize", 0) or 10)
-					_draw_text_field(output_page, widget_rect, value, fontsize)
+					_draw_text_field(
+						output_page,
+						widget_rect,
+						value,
+						fontsize,
+						comb_slots=_widget_comb_slots(widget),
+					)
 
 		return output_doc.tobytes(garbage=4, deflate=True)
 	finally:
@@ -211,10 +309,35 @@ def fill_pdf(
 	doc = fitz.open(template_path)
 	try:
 		for page in doc:
-			widgets = {widget.field_name: widget for widget in (page.widgets() or [])}
+			page_widgets = list(page.widgets() or [])
+			widgets = {widget.field_name: widget for widget in page_widgets}
+			radio_done: set[str] = set()
 			for field_name, value in form_data.items():
+				if field_name in radio_done:
+					continue
+
+				radio_widgets = [
+					w for w in page_widgets if w.field_name == field_name and w.field_type_string == "RadioButton"
+				]
+				if radio_widgets:
+					_set_radio_field(page, field_name, value)
+					if field_name in readonly_fields:
+						# Set flags on the whole group, but only update() the selected
+						# widget. Updating Off siblings can re-select them in PyMuPDF.
+						export_value = (value or "").strip()
+						selected = None
+						for widget in radio_widgets:
+							widget.field_flags = widget.field_flags | fitz.PDF_FIELD_IS_READ_ONLY
+							if _widget_matches_radio(widget, field_name, export_value):
+								selected = widget
+						if selected:
+							selected.field_value = export_value
+							selected.update()
+					radio_done.add(field_name)
+					continue
+
 				widget = widgets.get(field_name)
-				if not widget or widget.field_type_string == "RadioButton":
+				if not widget:
 					continue
 				if field_name in barcode_fields or field_name in image_fields:
 					_set_widget_value(widget, "")
