@@ -33,11 +33,35 @@
   {
    "child": 0,
    "collapsible": 1,
+   "icon": "small-file",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Print Designs",
+   "link_to": "PDF Print Design",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
    "icon": "edit",
    "indent": 0,
    "keep_closed": 0,
    "label": "PDF Field Designer",
    "link_to": "pdf-field-designer",
+   "link_type": "Page",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "image-view",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "PDF Print Designer",
+   "link_to": "pdf-print-designer",
    "link_type": "Page",
    "show_arrow": 0,
    "type": "Link"

@@ -1,7 +1,7 @@
 {
  "app": "pdffiller",
  "charts": [],
- "content": "[{\"id\":\"pfd-hdr\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>PDF Filler</b></span>\",\"col\":12}},{\"id\":\"pfd-sc-templates\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Form Template\",\"col\":4}},{\"id\":\"pfd-sc-designer\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Field Designer\",\"col\":4}},{\"id\":\"pfd-sc-ai\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Filler AI Settings\",\"col\":4}}]",
+ "content": "[{\"id\":\"pfd-hdr\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>PDF Filler</b></span>\",\"col\":12}},{\"id\":\"pfd-sc-templates\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Form Template\",\"col\":4}},{\"id\":\"pfd-sc-print-design\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Print Design\",\"col\":4}},{\"id\":\"pfd-sc-designer\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Field Designer\",\"col\":4}},{\"id\":\"pfd-sc-print-designer\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Print Designer\",\"col\":4}},{\"id\":\"pfd-sc-ai\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Filler AI Settings\",\"col\":4}}]",
  "creation": "2026-07-07 00:00:00",
  "custom_blocks": [],
  "docstatus": 0,
@@ -26,9 +26,29 @@
   {
    "hidden": 0,
    "is_query_report": 0,
+   "label": "Print Designs",
+   "link_count": 0,
+   "link_to": "PDF Print Design",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
    "label": "PDF Field Designer",
    "link_count": 0,
    "link_to": "pdf-field-designer",
+   "link_type": "Page",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "PDF Print Designer",
+   "link_count": 0,
+   "link_to": "pdf-print-designer",
    "link_type": "Page",
    "onboard": 0,
    "type": "Link"
@@ -44,7 +64,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-07-09 13:47:12.006563",
+ "modified": "2026-08-28 15:38:21.315578",
  "modified_by": "Administrator",
  "module": "PDF Filler",
  "name": "PDF Filler",
@@ -64,10 +84,24 @@
    "type": "DocType"
   },
   {
+   "color": "Green",
+   "doc_view": "List",
+   "label": "PDF Print Design",
+   "link_to": "PDF Print Design",
+   "type": "DocType"
+  },
+  {
    "color": "Orange",
    "doc_view": "",
    "label": "PDF Field Designer",
    "link_to": "pdf-field-designer",
+   "type": "Page"
+  },
+  {
+   "color": "Green",
+   "doc_view": "",
+   "label": "PDF Print Designer",
+   "link_to": "pdf-print-designer",
    "type": "Page"
   },
   {

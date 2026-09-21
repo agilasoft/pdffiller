@@ -14,10 +14,23 @@ from frappe.utils import cstr
 from pdffiller.utils.display_condition import should_display_template
 from pdffiller.utils.pdf_filler import build_field_preview, fill_template_pdf, get_pdf_path, list_acroform_fields
 
+SOURCE_FORM_TEMPLATE = "form_template"
+SOURCE_PRINT_DESIGN = "print_design"
+_TEMPLATE_LIST_FIELDS = ["name", "title", "show_on_draft", "group", "display_depends_on"]
 
-def _get_template(template: str):
+
+def _normalize_source(source: str | None) -> str:
+	value = (source or "").strip()
+	if value == SOURCE_PRINT_DESIGN:
+		return SOURCE_PRINT_DESIGN
+	return SOURCE_FORM_TEMPLATE
+
+
+def _get_template(template: str, source: str | None = None):
 	if not template:
-		frappe.throw(_("PDF Form Template is required"))
+		frappe.throw(_("PDF form is required"))
+	if _normalize_source(source) == SOURCE_PRINT_DESIGN:
+		return frappe.get_doc("PDF Print Design", template)
 	return frappe.get_doc("PDF Form Template", template)
 
 
@@ -56,17 +69,34 @@ def _filter_templates_for_doc(templates: list[dict], reference_doctype: str, nam
 	return [template for template in templates if should_display_template(template, source_doc)]
 
 
+def _doctype_available(doctype: str) -> bool:
+	try:
+		return bool(frappe.db.exists("DocType", doctype))
+	except Exception:
+		return True
+
+
+def _list_source_docs(doctype: str, source: str, reference_doctype: str) -> list[dict]:
+	if not _doctype_available(doctype):
+		return []
+	rows = frappe.get_all(
+		doctype,
+		filters={"reference_doctype": reference_doctype, "disabled": 0},
+		fields=_TEMPLATE_LIST_FIELDS,
+	)
+	for row in rows:
+		row["source"] = source
+	return rows
+
+
 @frappe.whitelist()
 def get_templates(reference_doctype: str, name: str | None = None) -> list[dict]:
 	if not reference_doctype:
 		return []
 
-	templates = frappe.get_all(
-		"PDF Form Template",
-		filters={"reference_doctype": reference_doctype, "disabled": 0},
-		fields=["name", "title", "show_on_draft", "group", "display_depends_on"],
-		order_by="group asc, title asc",
-	)
+	templates = _list_source_docs("PDF Form Template", SOURCE_FORM_TEMPLATE, reference_doctype)
+	templates.extend(_list_source_docs("PDF Print Design", SOURCE_PRINT_DESIGN, reference_doctype))
+	templates.sort(key=lambda row: ((row.get("group") or ""), (row.get("title") or row.get("name") or "")))
 	return _filter_templates_for_doc(templates, reference_doctype, name)
 
 
@@ -76,8 +106,9 @@ def _validate_template_visible(template_doc, source_doc):
 
 
 @frappe.whitelist()
-def get_form_preview(template: str, doctype: str, name: str) -> dict:
-	template_doc = _get_template(template)
+def get_form_preview(template: str, doctype: str, name: str, source: str | None = None) -> dict:
+	form_source = _normalize_source(source)
+	template_doc = _get_template(template, form_source)
 	_validate_source_access(doctype, name)
 
 	if template_doc.reference_doctype != doctype:
@@ -89,11 +120,13 @@ def get_form_preview(template: str, doctype: str, name: str) -> dict:
 	source_doc = frappe.get_doc(doctype, name)
 	_validate_template_visible(template_doc, source_doc)
 
+	is_print_design = form_source == SOURCE_PRINT_DESIGN
 	return {
 		"template": template_doc.name,
 		"title": template_doc.title,
 		"fields": build_field_preview(template_doc, source_doc),
-		"fields_only": bool(template_doc.fields_only),
+		"fields_only": False if is_print_design else bool(getattr(template_doc, "fields_only", 0)),
+		"source": form_source,
 	}
 
 
@@ -104,8 +137,10 @@ def get_filled_pdf(
 	name: str,
 	field_overrides: str | dict | None = None,
 	fields_only: int | bool | None = None,
+	source: str | None = None,
 ) -> dict:
-	template_doc = _get_template(template)
+	form_source = _normalize_source(source)
+	template_doc = _get_template(template, form_source)
 	_validate_source_access(doctype, name)
 
 	if template_doc.reference_doctype != doctype:
@@ -120,17 +155,22 @@ def get_filled_pdf(
 	overrides = _parse_overrides(field_overrides)
 	_validate_editable_overrides(template_doc, overrides)
 
-	use_fields_only = (
-		bool(int(fields_only or 0))
-		if fields_only is not None
-		else bool(template_doc.fields_only)
-	)
-	pdf_bytes = fill_template_pdf(
-		template_doc,
-		source_doc,
-		overrides=overrides,
-		fields_only=use_fields_only,
-	)
+	if form_source == SOURCE_PRINT_DESIGN:
+		from pdffiller.utils.print_design_fill import fill_print_design
+
+		pdf_bytes = fill_print_design(template_doc, source_doc, overrides=overrides)
+	else:
+		use_fields_only = (
+			bool(int(fields_only or 0))
+			if fields_only is not None
+			else bool(getattr(template_doc, "fields_only", 0))
+		)
+		pdf_bytes = fill_template_pdf(
+			template_doc,
+			source_doc,
+			overrides=overrides,
+			fields_only=use_fields_only,
+		)
 	encoded = base64.b64encode(pdf_bytes).decode("ascii")
 	filename = _safe_filename(template_doc.title, name)
 

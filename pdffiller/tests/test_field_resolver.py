@@ -113,7 +113,47 @@ class TestFieldResolver(unittest.TestCase):
 		)
 		self.assertEqual(resolve_mapping_value(doc, row), "Script Value")
 
-	def test_render_jinja_template_empty(self):
+	def test_resolve_child_row_and_system_field(self):
+		from pdffiller.utils.page_planner import OutputPage
+
+		doc = FakeDoc({"name": "QTN-1"})
+		row = SimpleNamespace(
+			source_type="Field Path",
+			source_field="item_code",
+			jinja_script="",
+			default_value="",
+			date_format="",
+			repeat_table="items",
+			repeat_field="item_code",
+		)
+		child = SimpleNamespace(item_code="WIDGET")
+		page = OutputPage(
+			role="Loop",
+			template_page=1,
+			row_start=2,
+			row_end=4,
+			page_n=2,
+			page_count=4,
+			continued=True,
+		)
+		self.assertEqual(
+			resolve_mapping_value(doc, row, extra={"row": child, "output_page": page, "page_n": 2}),
+			"WIDGET",
+		)
+
+		sys_row = SimpleNamespace(
+			source_type="Field Path",
+			source_field="page_n",
+			jinja_script="",
+			default_value="",
+			date_format="",
+			repeat_table="",
+			repeat_field="",
+		)
+		self.assertEqual(
+			resolve_mapping_value(doc, sys_row, extra={"output_page": page, "page_n": 2}),
+			"2",
+		)
 		doc = FakeDoc({"name": "DOC-001"})
 		self.assertEqual(render_jinja_template("", doc), "")
 

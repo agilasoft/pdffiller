@@ -161,6 +161,43 @@
 	gap: 10px;
 	font-size: 12px;
 	color: var(--text-muted, #666);
+	flex-wrap: wrap;
+}
+
+.pfd-page-role-label {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-left: 8px;
+}
+
+.pfd-page-role {
+	font-size: 12px;
+	max-width: 110px;
+}
+
+.pfd-always-last {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12px;
+	margin-bottom: 10px;
+}
+
+.pfd-child-table {
+	margin-bottom: 10px;
+}
+
+.pfd-child-table-title {
+	font-size: 11px;
+	font-weight: 600;
+	margin-bottom: 4px;
+}
+
+.pfd-field-overlay--repeat {
+	border-color: rgba(90, 120, 80, 0.75);
+	background: rgba(90, 140, 80, 0.12);
+	color: #2d4a2a;
 }
 
 .pfd-canvas-wrap {

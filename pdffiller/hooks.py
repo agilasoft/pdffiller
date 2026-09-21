@@ -16,12 +16,16 @@ app_include_css = [
 
 fixtures = [
 	{"dt": "Workspace", "filters": [["module", "=", "PDF Filler"]]},
-	{"dt": "Page", "filters": [["name", "=", "pdf-field-designer"]]},
+	{"dt": "Page", "filters": [["name", "in", ["pdf-field-designer", "pdf-print-designer"]]]},
 	{"dt": "Desktop Icon", "filters": [["app", "=", "pdffiller"]]},
 	{"dt": "Workspace Sidebar", "filters": [["app", "=", "pdffiller"]]},
 ]
 
-doctype_js = {"PDF Form Template": "public/js/pdf_form_template.js"}
+doctype_js = {
+	"PDF Form Template": "public/js/pdf_form_template.js",
+	"PDF Print Design": "public/js/pdf_print_design.js",
+}
+doctype_list_js = {"PDF Form Template": "public/js/pdf_form_template_list.js"}
 
 extend_bootinfo = "pdffiller.boot.extend_bootinfo"
 after_install = "pdffiller.install.after_install"

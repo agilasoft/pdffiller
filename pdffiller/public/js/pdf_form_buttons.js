@@ -5,7 +5,11 @@ frappe.provide("pdffiller.forms");
 (function () {
 	"use strict";
 
-	const SKIP_DOCTYPES = new Set(["PDF Form Template", "PDF Form Field Mapping"]);
+	const SKIP_DOCTYPES = new Set([
+		"PDF Form Template",
+		"PDF Form Field Mapping",
+		"PDF Print Design",
+	]);
 	const cache = {};
 
 	function should_skip_form(frm) {
@@ -54,7 +58,7 @@ frappe.provide("pdffiller.forms");
 
 	function open_template(frm, template) {
 		return function () {
-			pdffiller.viewer.open(frm, template.name, template.title);
+			pdffiller.viewer.open(frm, template.name, template.title, template.source);
 		};
 	}
 

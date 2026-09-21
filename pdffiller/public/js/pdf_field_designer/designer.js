@@ -23,8 +23,17 @@ frappe.provide("pdffiller.designer");
 	const MIN_WIDTH_PT = 20;
 	const MIN_HEIGHT_PT = 12;
 
+	const PAGE_ROLES = ["Once", "First", "Loop", "Last"];
+	const ROW_GAP_PT = 4;
+
+	const MAX_UNDO = 80;
+	const UNDO_COALESCE_MS = 500;
+
 	let pageInstance = null;
 	let dragState = null;
+	let undoStack = [];
+	let redoStack = [];
+	let applyingHistory = false;
 
 	let state = {
 		templateName: null,
@@ -44,7 +53,11 @@ frappe.provide("pdffiller.designer");
 		collapsedSections: {
 			fieldTypes: false,
 			referenceFields: false,
+			childTables: false,
 		},
+		page_roles: {},
+		always_print_last: 0,
+		child_tables: [],
 	};
 
 	function getTemplateName() {
@@ -143,6 +156,9 @@ frappe.provide("pdffiller.designer");
 			date_format: spec?.date_format || (type === "Date" ? "%d-%m-%Y" : ""),
 			editable: 0,
 			options: spec?.options || "",
+			repeat_table: "",
+			repeat_field: "",
+			repeat_slot: 0,
 		};
 	}
 
@@ -157,6 +173,9 @@ frappe.provide("pdffiller.designer");
 			date_format: field.date_format || "",
 			editable: field.editable ? 1 : 0,
 			options: field.options || "",
+			repeat_table: field.repeat_table || "",
+			repeat_field: field.repeat_field || "",
+			repeat_slot: Number(field.repeat_slot || 0),
 			...field,
 			field_type,
 			id: field.id || nextFieldId(),
@@ -165,6 +184,95 @@ frappe.provide("pdffiller.designer");
 
 	function markDirty() {
 		state.dirty = true;
+	}
+
+	function cloneUndoableState() {
+		return {
+			fields: state.fields.map((field) => ({ ...field })),
+			selectedId: state.selectedId,
+			currentPage: state.currentPage,
+			page_roles: { ...(state.page_roles || {}) },
+			always_print_last: state.always_print_last,
+			fieldCounter: state.fieldCounter,
+			dirty: state.dirty,
+		};
+	}
+
+	function restoreUndoableState(snapshot) {
+		state.fields = (snapshot.fields || []).map((field) => ({ ...field }));
+		state.selectedId = snapshot.selectedId;
+		state.currentPage = snapshot.currentPage;
+		state.page_roles = { ...(snapshot.page_roles || {}) };
+		state.always_print_last = snapshot.always_print_last;
+		state.fieldCounter = snapshot.fieldCounter;
+		state.dirty = snapshot.dirty;
+	}
+
+	function clearHistory() {
+		undoStack = [];
+		redoStack = [];
+	}
+
+	function pushUndo(label, { coalesce = false } = {}) {
+		if (applyingHistory) return;
+		const now = Date.now();
+		const last = undoStack[undoStack.length - 1];
+		if (coalesce && last && last.label === label && now - last.time < UNDO_COALESCE_MS) {
+			last.time = now;
+			return;
+		}
+		undoStack.push({
+			label,
+			time: now,
+			snapshot: cloneUndoableState(),
+		});
+		if (undoStack.length > MAX_UNDO) {
+			undoStack.shift();
+		}
+		redoStack = [];
+	}
+
+	function undo() {
+		if (!undoStack.length) return;
+		const entry = undoStack.pop();
+		redoStack.push({
+			label: entry.label,
+			time: Date.now(),
+			snapshot: cloneUndoableState(),
+		});
+		applyingHistory = true;
+		restoreUndoableState(entry.snapshot);
+		applyingHistory = false;
+		render();
+	}
+
+	function redo() {
+		if (!redoStack.length) return;
+		const entry = redoStack.pop();
+		undoStack.push({
+			label: entry.label,
+			time: Date.now(),
+			snapshot: cloneUndoableState(),
+		});
+		applyingHistory = true;
+		restoreUndoableState(entry.snapshot);
+		applyingHistory = false;
+		render();
+	}
+
+	function isDesignerActive() {
+		const route = frappe.get_route();
+		if (!Array.isArray(route) || route[0] !== "pdf-field-designer") return false;
+		return Boolean(getAppEl());
+	}
+
+	function isTypingTarget(target) {
+		if (!target) return false;
+		const tag = (target.tagName || "").toUpperCase();
+		if (["INPUT", "TEXTAREA", "SELECT"].includes(tag)) return true;
+		if (target.isContentEditable) return true;
+		if (typeof target.closest === "function" && target.closest(".modal")) return true;
+		return false;
 	}
 
 	function loadContext(templateName) {
@@ -186,10 +294,14 @@ frappe.provide("pdffiller.designer");
 				state.reference_fields = data.reference_fields || [];
 				state.source_types = data.source_types || state.source_types;
 				state.date_formats = data.date_formats || state.date_formats;
+				state.child_tables = data.child_tables || [];
+				state.page_roles = data.page_roles || {};
+				state.always_print_last = data.always_print_last ? 1 : 0;
 				state.fields = (data.fields || []).map(normalizeLoadedField);
 				state.currentPage = 0;
 				state.selectedId = null;
 				state.dirty = false;
+				clearHistory();
 				if (pageInstance) {
 					pageInstance.set_title(state.title || __("PDF Field Designer"));
 				}
@@ -238,6 +350,8 @@ frappe.provide("pdffiller.designer");
 			args: {
 				template: state.templateName,
 				fields: JSON.stringify(payload),
+				page_roles: JSON.stringify(state.page_roles || {}),
+				always_print_last: state.always_print_last ? 1 : 0,
 			},
 			freeze: true,
 			freeze_message: __("Saving design…"),
@@ -280,13 +394,23 @@ frappe.provide("pdffiller.designer");
 			options: field.options || "",
 			text_maxlen: field.text_maxlen || 0,
 			comb: field.comb ? 1 : 0,
+			repeat_table: field.repeat_table || "",
+			repeat_field: field.repeat_field || "",
+			repeat_slot: Number(field.repeat_slot || 0),
 		}));
 	}
 
 	function applyAISuggestions(suggestions) {
 		if (!suggestions?.length) return;
-		let applied = 0;
-		for (const suggestion of suggestions) {
+		const applicable = suggestions.filter((suggestion) =>
+			state.fields.some((item) => item.field_name === suggestion.pdf_field_name)
+		);
+		if (!applicable.length) {
+			frappe.show_alert({ message: __("No matching fields to update."), indicator: "orange" });
+			return;
+		}
+		pushUndo("ai-suggestions");
+		for (const suggestion of applicable) {
 			const field = state.fields.find((item) => item.field_name === suggestion.pdf_field_name);
 			if (!field) continue;
 			Object.assign(field, {
@@ -294,16 +418,11 @@ frappe.provide("pdffiller.designer");
 				source_field: suggestion.source_field || "",
 				jinja_script: suggestion.jinja_script || "",
 			});
-			applied += 1;
-		}
-		if (!applied) {
-			frappe.show_alert({ message: __("No matching fields to update."), indicator: "orange" });
-			return;
 		}
 		markDirty();
 		render();
 		frappe.show_alert({
-			message: __("{0} mapping(s) applied", [applied]),
+			message: __("{0} mapping(s) applied", [applicable.length]),
 			indicator: "green",
 		});
 	}
@@ -339,6 +458,7 @@ frappe.provide("pdffiller.designer");
 
 	function deleteSelectedField() {
 		if (!state.selectedId) return;
+		pushUndo("delete-field");
 		state.fields = state.fields.filter((field) => field.id !== state.selectedId);
 		state.selectedId = null;
 		markDirty();
@@ -355,6 +475,7 @@ frappe.provide("pdffiller.designer");
 		const maxX = Math.max(0, page.width_pt - width);
 		const maxY = Math.max(0, page.height_pt - height);
 
+		pushUndo("add-field");
 		const field = {
 			id: nextFieldId(),
 			field_name: nextFieldName(type),
@@ -421,6 +542,183 @@ frappe.provide("pdffiller.designer");
 		return map[fieldtype] || fallback || "Data";
 	}
 
+	function getPageRole(pageNo) {
+		const roles = state.page_roles || {};
+		return roles[pageNo] || roles[String(pageNo)] || "Once";
+	}
+
+	function setPageRole(pageNo, role) {
+		state.page_roles = state.page_roles || {};
+		pushUndo(`page-role:${pageNo}`, { coalesce: true });
+		state.page_roles[pageNo] = role;
+		state.page_roles[String(pageNo)] = role;
+		markDirty();
+	}
+
+	function mapChildField(tableField, childField) {
+		const selected = getSelectedField();
+		const updates = {
+			source_type: "Field Path",
+			source_field: childField.fieldname,
+			repeat_table: tableField.fieldname,
+			repeat_field: childField.fieldname,
+			repeat_slot: selected ? Number(selected.repeat_slot || 0) : 0,
+			field_type: mapFrappeFieldtype(childField.fieldtype, selected?.field_type || "Data"),
+		};
+		if (selected) {
+			updateSelectedField(updates, { refreshCanvas: true, refreshProperties: true });
+			return;
+		}
+		addField(updates.field_type, 72, 72, {
+			...updates,
+			field_name: `${tableField.fieldname}_${childField.fieldname}`.replace(/[^A-Za-z0-9_]/g, "_"),
+		});
+	}
+
+	function currentRepeatSlotCount(tableName, pageNo) {
+		const slots = state.fields
+			.filter(
+				(field) =>
+					field.page === pageNo &&
+					field.repeat_table === tableName &&
+					field.repeat_table
+			)
+			.map((field) => Number(field.repeat_slot || 0));
+		if (!slots.length) return 0;
+		return Math.max(...slots) + 1;
+	}
+
+	function tileRepeatRows(rowsPerPage) {
+		const selected = getSelectedField();
+		if (!selected || !selected.repeat_table) {
+			frappe.msgprint({
+				title: __("Repeating row"),
+				message: __("Select a field mapped to a child table first."),
+				indicator: "orange",
+			});
+			return;
+		}
+
+		const page = getCurrentPage();
+		if (!page) return;
+		const table = selected.repeat_table;
+		const pageNo = state.currentPage;
+		let prototypes = state.fields.filter(
+			(field) =>
+				field.page === pageNo &&
+				field.repeat_table === table &&
+				Number(field.repeat_slot || 0) === 0
+		);
+		const usingSelectedAsPrototype = !prototypes.length;
+		if (usingSelectedAsPrototype) {
+			prototypes = [selected];
+		}
+
+		const count = Math.max(1, parseInt(rowsPerPage, 10) || 1);
+		const minY = Math.min(...prototypes.map((field) => field.y));
+		const maxBottom = Math.max(...prototypes.map((field) => field.y + field.height));
+		const rowHeight = maxBottom - minY + ROW_GAP_PT;
+		const lastBottom = minY + rowHeight * count - ROW_GAP_PT;
+		if (lastBottom > page.height_pt) {
+			frappe.msgprint({
+				title: __("Not enough space"),
+				message: __("Those rows do not fit on this page. Use fewer rows or a Loop page."),
+				indicator: "orange",
+			});
+			return;
+		}
+
+		pushUndo("tile-repeat-rows");
+		if (usingSelectedAsPrototype) {
+			selected.repeat_slot = 0;
+		}
+
+		state.fields = state.fields.filter(
+			(field) =>
+				!(
+					field.page === pageNo &&
+					field.repeat_table === table &&
+					Number(field.repeat_slot || 0) >= count
+				)
+		);
+
+		const existingSlots = new Set(
+			state.fields
+				.filter((field) => field.page === pageNo && field.repeat_table === table)
+				.map((field) => Number(field.repeat_slot || 0))
+		);
+
+		for (let slot = 1; slot < count; slot += 1) {
+			if (existingSlots.has(slot)) continue;
+			prototypes.forEach((proto) => {
+				const clone = {
+					...proto,
+					id: nextFieldId(),
+					field_name: nextFieldName(proto.field_type),
+					y: proto.y + slot * rowHeight,
+					repeat_slot: slot,
+					repeat_table: table,
+					repeat_field: proto.repeat_field || proto.source_field || "",
+				};
+				state.fields.push(clone);
+			});
+		}
+
+		markDirty();
+		render();
+	}
+
+	function previewWithDocument() {
+		if (!state.reference_doctype || !state.templateName) return;
+		if (state.dirty) {
+			frappe.msgprint({
+				title: __("Save first"),
+				message: __("Save the design before previewing a document."),
+				indicator: "orange",
+			});
+			return;
+		}
+
+		const dialog = new frappe.ui.Dialog({
+			title: __("Preview with document"),
+			fields: [
+				{
+					fieldtype: "Link",
+					options: state.reference_doctype,
+					fieldname: "name",
+					label: __("Document"),
+					reqd: 1,
+				},
+			],
+			primary_action_label: __("Preview"),
+			primary_action(values) {
+				dialog.hide();
+				frappe.call({
+					method: "pdffiller.api.forms.get_filled_pdf",
+					args: {
+						template: state.templateName,
+						doctype: state.reference_doctype,
+						name: values.name,
+					},
+					freeze: true,
+					freeze_message: __("Building preview…"),
+					callback(r) {
+						const uri = r.message && r.message.data_uri;
+						if (!uri) return;
+						const win = window.open("", "_blank");
+						if (!win) return;
+						win.document.write(
+							`<!DOCTYPE html><title>${frappe.utils.escape_html(
+								__("PDF Preview")
+							)}</title><iframe src="${uri}" style="position:fixed;inset:0;border:0;width:100%;height:100%"></iframe>`
+						);
+					},
+				});
+			},
+		});
+		dialog.show();
+	}
+
 	function clamp(value, min, max) {
 		return Math.min(Math.max(value, min), max);
 	}
@@ -428,6 +726,7 @@ frappe.provide("pdffiller.designer");
 	function updateSelectedField(updates, options = {}) {
 		const field = getSelectedField();
 		if (!field) return;
+		pushUndo(`update:${field.id}:${Object.keys(updates).sort().join(",")}`, { coalesce: true });
 		Object.assign(field, updates);
 		markDirty();
 		if (options.refreshCanvas) {
@@ -479,6 +778,37 @@ frappe.provide("pdffiller.designer");
 		).join("");
 	}
 
+	function renderChildTables() {
+		if (!state.child_tables.length) {
+			return `<div class="pfd-help-text">${__("No child tables on this DocType.")}</div>`;
+		}
+		return state.child_tables
+			.map((table) => {
+				const fields = (table.fields || [])
+					.map(
+						(field) => `
+					<div
+						class="pfd-ref-field pfd-child-field"
+						data-table="${frappe.utils.escape_html(table.fieldname)}"
+						data-fieldname="${frappe.utils.escape_html(field.fieldname)}"
+						data-fieldtype="${frappe.utils.escape_html(field.fieldtype)}"
+						title="${__("Click to map as a repeating row field")}"
+					>
+						<span class="pfd-ref-name">${frappe.utils.escape_html(field.label || field.fieldname)}</span>
+						<span class="pfd-ref-meta">${frappe.utils.escape_html(table.fieldname)}.${frappe.utils.escape_html(
+							field.fieldname
+						)}</span>
+					</div>`
+					)
+					.join("");
+				return `<div class="pfd-child-table">
+					<div class="pfd-child-table-title">${frappe.utils.escape_html(table.label || table.fieldname)}</div>
+					${fields || `<div class="pfd-help-text">${__("No columns")}</div>`}
+				</div>`;
+			})
+			.join("");
+	}
+
 	function renderReferenceFields() {
 		const fields = filteredReferenceFields();
 		if (!state.reference_doctype) {
@@ -509,15 +839,22 @@ frappe.provide("pdffiller.designer");
 
 	function renderFieldOverlay(field) {
 		const selected = field.id === state.selectedId ? " pfd-selected" : "";
+		const repeatClass = field.repeat_table ? " pfd-field-overlay--repeat" : "";
 		const left = ptToPx(field.x);
 		const top = ptToPx(field.y);
 		const width = ptToPx(field.width);
 		const height = ptToPx(field.height);
 		const label = frappe.utils.escape_html(field.field_name);
 		const typeLabel = frappe.utils.escape_html(field.field_type);
-		const mapLabel = field.source_field
-			? frappe.utils.escape_html(field.source_field)
-			: __("Unmapped");
+		const mapLabel = field.repeat_table
+			? frappe.utils.escape_html(
+					`${field.repeat_table}[${Number(field.repeat_slot || 0)}].${
+						field.repeat_field || field.source_field || ""
+					}`
+			  )
+			: field.source_field
+				? frappe.utils.escape_html(field.source_field)
+				: __("Unmapped");
 
 		const specialClass =
 			field.field_type === "Barcode"
@@ -536,7 +873,7 @@ frappe.provide("pdffiller.designer");
 
 		return `
 			<div
-				class="pfd-field-overlay${selected}${specialClass}"
+				class="pfd-field-overlay${selected}${specialClass}${repeatClass}"
 				data-field-id="${field.id}"
 				style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;"
 			>
@@ -566,6 +903,11 @@ frappe.provide("pdffiller.designer");
 
 		state.scale = getScale();
 		const fieldsHtml = getPageFields(state.currentPage).map(renderFieldOverlay).join("");
+		const pageRole = getPageRole(state.currentPage);
+		const roleOptions = PAGE_ROLES.map(
+			(role) =>
+				`<option value="${role}" ${role === pageRole ? "selected" : ""}>${__(role)}</option>`
+		).join("");
 
 		return `
 			<div class="pfd-page-nav">
@@ -576,6 +918,9 @@ frappe.provide("pdffiller.designer");
 				<button type="button" class="btn btn-default btn-sm pfd-next-page" ${
 					state.currentPage >= state.pages.length - 1 ? "disabled" : ""
 				}>${__("Next")}</button>
+				<label class="pfd-page-role-label">${__("Role")}
+					<select class="pfd-page-role">${roleOptions}</select>
+				</label>
 			</div>
 			<div class="pfd-canvas-wrap" style="width:100%;max-width:${page.width_pt * 1.2}px;">
 				<img class="pfd-canvas-image" src="${page.image_data_uri}" alt="${__(
@@ -717,6 +1062,56 @@ frappe.provide("pdffiller.designer");
 				</div>
 			</div>
 
+			<div class="pfd-prop-section">
+				<div class="pfd-panel-title">${__("Repeating row")}</div>
+				<div class="pfd-form-group">
+					<label>${__("Child Table")}</label>
+					<select class="pfd-prop-repeat-table">
+						<option value="">${__("None")}</option>
+						${(state.child_tables || [])
+							.map(
+								(table) =>
+									`<option value="${frappe.utils.escape_html(table.fieldname)}" ${
+										table.fieldname === (field.repeat_table || "") ? "selected" : ""
+									}>${frappe.utils.escape_html(table.label || table.fieldname)}</option>`
+							)
+							.join("")}
+					</select>
+				</div>
+				${
+					field.repeat_table
+						? `<div class="pfd-form-group">
+							<label>${__("Child Field")}</label>
+							<select class="pfd-prop-repeat-field">
+								<option value="">${__("Select field")}</option>
+								${((state.child_tables.find((table) => table.fieldname === field.repeat_table) || {}).fields || [])
+									.map(
+										(col) =>
+											`<option value="${frappe.utils.escape_html(col.fieldname)}" ${
+												col.fieldname === (field.repeat_field || field.source_field || "")
+													? "selected"
+													: ""
+											}>${frappe.utils.escape_html(col.label || col.fieldname)}</option>`
+									)
+									.join("")}
+							</select>
+						</div>
+						<div class="pfd-form-group">
+							<label>${__("Rows on this page")}</label>
+							<input type="number" class="pfd-prop-repeat-rows" min="1" max="80" value="${
+								currentRepeatSlotCount(field.repeat_table, field.page) || 1
+							}" />
+						</div>
+						<button type="button" class="btn btn-default btn-sm pfd-tile-rows">${__("Tile rows")}</button>
+						<div class="pfd-help-text">${__("Slot {0} is this field’s row on the page.", [
+							Number(field.repeat_slot || 0) + 1,
+						])}</div>`
+						: `<div class="pfd-help-text">${__(
+								"Map a child table to print line items. Tile extra slots on this page; Loop clones the page when they overflow."
+						  )}</div>`
+				}
+			</div>
+
 			<button type="button" class="btn btn-danger btn-sm pfd-delete-field">${__("Delete Field")}</button>
 		`;
 	}
@@ -736,6 +1131,7 @@ frappe.provide("pdffiller.designer");
 						${frappe.utils.icon("magic", "xs")}
 						${__("AI Assist")}
 					</button>
+					<button type="button" class="btn btn-default btn-sm pfd-preview-btn">${__("Preview")}</button>
 					<button type="button" class="btn btn-default btn-sm pfd-cancel-btn">${__("Back")}</button>
 					<button type="button" class="btn btn-primary btn-sm pfd-save-btn">${__("Save Design")}</button>
 				</div>
@@ -751,9 +1147,16 @@ frappe.provide("pdffiller.designer");
 						)}" />
 						<div class="pfd-ref-fields">${renderReferenceFields()}</div>`
 					)}
+					${renderCollapsibleSection("childTables", __("Child Tables"), renderChildTables())}
 				</div>
 				<div class="pfd-center pfd-canvas-container">${renderCanvas()}</div>
 				<div class="pfd-right">
+					<label class="pfd-always-last">
+						<input type="checkbox" class="pfd-always-print-last" ${
+							state.always_print_last ? "checked" : ""
+						} />
+						${__("Always print Last page")}
+					</label>
 					<div class="pfd-panel-title">${__("Properties")}</div>
 					<div class="pfd-properties">${renderProperties()}</div>
 				</div>
@@ -838,6 +1241,7 @@ frappe.provide("pdffiller.designer");
 	function bindEvents(app) {
 		app.querySelector(".pfd-ai-btn")?.addEventListener("click", openAIAssist);
 		app.querySelector(".pfd-save-btn")?.addEventListener("click", saveDesign);
+		app.querySelector(".pfd-preview-btn")?.addEventListener("click", previewWithDocument);
 		app.querySelector(".pfd-cancel-btn")?.addEventListener("click", () => {
 			if (state.dirty && !confirm(__("Discard unsaved changes?"))) return;
 			frappe.set_route("Form", "PDF Form Template", state.templateName);
@@ -869,8 +1273,29 @@ frappe.provide("pdffiller.designer");
 		});
 
 		bindReferenceFieldEvents(app.querySelector(".pfd-ref-fields"));
+		bindChildTableEvents(app);
 		bindCanvasEvents(app.querySelector(".pfd-canvas-container"));
 		bindPropertyEvents(app.querySelector(".pfd-properties"));
+
+		app.querySelector(".pfd-always-print-last")?.addEventListener("change", (e) => {
+			pushUndo("always-print-last");
+			state.always_print_last = e.target.checked ? 1 : 0;
+			markDirty();
+		});
+	}
+
+	function bindChildTableEvents(container) {
+		if (!container) return;
+		container.querySelectorAll(".pfd-child-field").forEach((item) => {
+			item.addEventListener("click", () => {
+				const table = (state.child_tables || []).find((row) => row.fieldname === item.dataset.table);
+				if (!table) return;
+				mapChildField(table, {
+					fieldname: item.dataset.fieldname,
+					fieldtype: item.dataset.fieldtype,
+				});
+			});
+		});
 	}
 
 	function bindCanvasEvents(container) {
@@ -892,6 +1317,10 @@ frappe.provide("pdffiller.designer");
 				renderCanvasContainer();
 				renderPropertiesPanel();
 			}
+		});
+
+		container.querySelector(".pfd-page-role")?.addEventListener("change", (e) => {
+			setPageRole(state.currentPage, e.target.value);
 		});
 
 		const overlay = container.querySelector(".pfd-canvas-overlay");
@@ -1009,6 +1438,33 @@ frappe.provide("pdffiller.designer");
 			updateSelectedField({ editable: e.target.checked ? 1 : 0 });
 		});
 
+		panel.querySelector(".pfd-prop-repeat-table")?.addEventListener("change", (e) => {
+			const table = e.target.value;
+			updateSelectedField(
+				{
+					repeat_table: table,
+					repeat_field: table ? getSelectedField()?.repeat_field || "" : "",
+					repeat_slot: table ? Number(getSelectedField()?.repeat_slot || 0) : 0,
+				},
+				{ refreshCanvas: true, refreshProperties: true }
+			);
+		});
+
+		panel.querySelector(".pfd-prop-repeat-field")?.addEventListener("change", (e) => {
+			updateSelectedField(
+				{
+					repeat_field: e.target.value,
+					source_field: e.target.value || getSelectedField()?.source_field || "",
+				},
+				{ refreshCanvas: true }
+			);
+		});
+
+		panel.querySelector(".pfd-tile-rows")?.addEventListener("click", () => {
+			const input = panel.querySelector(".pfd-prop-repeat-rows");
+			tileRepeatRows(input ? input.value : 1);
+		});
+
 		panel.querySelector(".pfd-delete-field")?.addEventListener("click", deleteSelectedField);
 	}
 
@@ -1031,7 +1487,7 @@ frappe.provide("pdffiller.designer");
 		const startY = e.clientY;
 		const startField = { ...field };
 
-		dragState = { field, isResize, startX, startY, startField };
+		dragState = { field, isResize, startX, startY, startField, historyPushed: false };
 
 		document.addEventListener("mousemove", onDocumentMouseMove);
 		document.addEventListener("mouseup", onDocumentMouseUp);
@@ -1042,6 +1498,11 @@ frappe.provide("pdffiller.designer");
 			const dy = pxToPt(moveEvent.clientY - dragState.startY);
 			const page = getCurrentPage();
 			if (!page) return;
+
+			if (!dragState.historyPushed && (dx !== 0 || dy !== 0)) {
+				pushUndo(dragState.isResize ? `resize:${dragState.field.id}` : `move:${dragState.field.id}`);
+				dragState.historyPushed = true;
+			}
 
 			if (dragState.isResize) {
 				const width = Math.max(MIN_WIDTH_PT, dragState.startField.width + dx);
@@ -1069,9 +1530,24 @@ frappe.provide("pdffiller.designer");
 	}
 
 	function onKeyDown(e) {
+		if (!isDesignerActive()) return;
+		if (isTypingTarget(e.target)) return;
+
+		const key = (e.key || "").toLowerCase();
+		const modifier = e.ctrlKey || e.metaKey;
+		if (modifier && key === "z") {
+			e.preventDefault();
+			if (e.shiftKey) redo();
+			else undo();
+			return;
+		}
+		if (modifier && key === "y") {
+			e.preventDefault();
+			redo();
+			return;
+		}
+
 		if (!state.selectedId) return;
-		const tag = (e.target && e.target.tagName) || "";
-		if (["INPUT", "TEXTAREA", "SELECT"].includes(tag)) return;
 		if (e.key === "Delete" || e.key === "Backspace") {
 			e.preventDefault();
 			deleteSelectedField();

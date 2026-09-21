@@ -143,7 +143,7 @@ frappe.provide("pdffiller.viewer");
 		return overrides;
 	}
 
-	function bind_viewer_actions($viewer, state, frm, template_name) {
+	function bind_preview_actions($viewer, state, reload) {
 		$viewer.find(".pdffiller-print-btn").off("click").on("click", function () {
 			if (!state.payload) return;
 			print_pdf(state.payload.data_uri);
@@ -155,12 +155,12 @@ frappe.provide("pdffiller.viewer");
 		});
 
 		$viewer.find(".pdffiller-refresh-btn").off("click").on("click", function () {
-			load_filled_pdf($viewer, state, frm, template_name);
+			reload();
 		});
 
 		$viewer.find(".pdffiller-fields-only-checkbox").off("change").on("change", function () {
 			state.fields_only = $(this).is(":checked");
-			load_filled_pdf($viewer, state, frm, template_name);
+			reload();
 		});
 
 		$viewer.find(".pdffiller-form-panel-toggle").off("click").on("click", function () {
@@ -172,12 +172,38 @@ frappe.provide("pdffiller.viewer");
 		$viewer.find(".pdffiller-field-input").off("keydown").on("keydown", function (event) {
 			if (event.key === "Enter") {
 				event.preventDefault();
-				load_filled_pdf($viewer, state, frm, template_name);
+				reload();
 			}
 		});
 	}
 
-	function load_filled_pdf($viewer, state, frm, template_name) {
+	function apply_payload($viewer, state, payload) {
+		if (payload.fields) {
+			state.fields = payload.fields;
+			const collapsed = $viewer
+				.find(".pdffiller-form-wrapper")
+				.hasClass("pdffiller-form-wrapper--collapsed");
+			$viewer.find(".pdffiller-form-wrapper").html(render_form_panel(state.fields));
+			if (collapsed) {
+				$viewer.find(".pdffiller-form-wrapper").addClass("pdffiller-form-wrapper--collapsed");
+			}
+		}
+		if (payload.fields_only !== undefined) {
+			state.fields_only = Boolean(payload.fields_only);
+			$viewer.find(".pdffiller-fields-only-checkbox").prop("checked", state.fields_only);
+		}
+		state.payload = payload;
+		render_pdf_frame($viewer.find(".pdffiller-viewer-frame"), payload.data_uri);
+		$viewer.find(".pdffiller-print-btn, .pdffiller-download-btn").prop("disabled", false);
+	}
+
+	function bind_viewer_actions($viewer, state, frm, template_name, source) {
+		bind_preview_actions($viewer, state, function () {
+			load_filled_pdf($viewer, state, frm, template_name, source);
+		});
+	}
+
+	function load_filled_pdf($viewer, state, frm, template_name, source) {
 		const overrides = collect_overrides($viewer, state.fields || []);
 		const $frame = $viewer.find(".pdffiller-viewer-frame");
 		$frame.html(`<div class="pdffiller-loading text-muted">${__("Generating PDF...")}</div>`);
@@ -191,6 +217,7 @@ frappe.provide("pdffiller.viewer");
 				name: frm.doc.name,
 				field_overrides: overrides,
 				fields_only: state.fields_only ? 1 : 0,
+				source: source || "form_template",
 			},
 			freeze: true,
 			callback(r) {
@@ -203,14 +230,69 @@ frappe.provide("pdffiller.viewer");
 					return;
 				}
 
-				state.payload = r.message;
-				render_pdf_frame($frame, state.payload.data_uri);
-				$viewer.find(".pdffiller-print-btn, .pdffiller-download-btn").prop("disabled", false);
+				apply_payload($viewer, state, r.message);
 			},
 		});
 	}
 
-	pdffiller.viewer.open = function (frm, template_name, template_title) {
+	pdffiller.viewer.open_preview = function (opts) {
+		opts = opts || {};
+		const dialog = new frappe.ui.Dialog({
+			title: opts.title || __("PDF Form"),
+			size: "extra-large",
+			fields: [
+				{
+					fieldtype: "HTML",
+					fieldname: "pdf_preview",
+				},
+			],
+		});
+
+		const state = {
+			fields: opts.fields || [],
+			payload: null,
+			fields_only: Boolean(opts.fields_only),
+		};
+		dialog.show();
+		dialog.$wrapper.find(".modal-body").addClass("pdffiller-dialog-body");
+
+		const $preview = dialog.fields_dict.pdf_preview.$wrapper;
+		$preview.html(render_preview_shell());
+		const $viewer = $preview.find(".pdffiller-viewer").first();
+		$viewer.find(".pdffiller-fields-only-checkbox").prop("checked", state.fields_only);
+		$viewer
+			.find(".pdffiller-form-wrapper")
+			.addClass("pdffiller-form-wrapper--collapsed")
+			.html(render_form_panel(state.fields));
+
+		function reload() {
+			if (typeof opts.load !== "function") {
+				return;
+			}
+			state.overrides = collect_overrides($viewer, state.fields || []);
+			const $frame = $viewer.find(".pdffiller-viewer-frame");
+			$frame.html(`<div class="pdffiller-loading text-muted">${__("Generating PDF...")}</div>`);
+			$viewer.find(".pdffiller-print-btn, .pdffiller-download-btn").prop("disabled", true);
+			opts.load(state, function (payload) {
+				if (!payload || !payload.data_uri) {
+					frappe.msgprint({
+						title: __("Error"),
+						message: __("Could not generate the filled PDF."),
+						indicator: "red",
+					});
+					return;
+				}
+				apply_payload($viewer, state, payload);
+				bind_preview_actions($viewer, state, reload);
+			});
+		}
+
+		bind_preview_actions($viewer, state, reload);
+		reload();
+		return dialog;
+	};
+
+	pdffiller.viewer.open = function (frm, template_name, template_title, source) {
 		const dialog = new frappe.ui.Dialog({
 			title: template_title || __("PDF Form"),
 			size: "extra-large",
@@ -222,6 +304,7 @@ frappe.provide("pdffiller.viewer");
 			],
 		});
 
+		const form_source = source || "form_template";
 		const state = { fields: [], payload: null, fields_only: false };
 		dialog.show();
 		dialog.$wrapper.find(".modal-body").addClass("pdffiller-dialog-body");
@@ -229,6 +312,9 @@ frappe.provide("pdffiller.viewer");
 		const $preview = dialog.fields_dict.pdf_preview.$wrapper;
 		$preview.html(render_preview_shell());
 		const $viewer = $preview.find(".pdffiller-viewer").first();
+		if (form_source === "print_design") {
+			$viewer.find(".pdffiller-fields-only-toggle").hide();
+		}
 
 		frappe.call({
 			method: "pdffiller.api.forms.get_form_preview",
@@ -236,6 +322,7 @@ frappe.provide("pdffiller.viewer");
 				template: template_name,
 				doctype: frm.doctype,
 				name: frm.doc.name,
+				source: form_source,
 			},
 			freeze: true,
 			callback(r) {
@@ -258,8 +345,8 @@ frappe.provide("pdffiller.viewer");
 				$form_wrapper
 					.addClass("pdffiller-form-wrapper--collapsed")
 					.html(render_form_panel(state.fields));
-				bind_viewer_actions($viewer, state, frm, template_name);
-				load_filled_pdf($viewer, state, frm, template_name);
+				bind_viewer_actions($viewer, state, frm, template_name, form_source);
+				load_filled_pdf($viewer, state, frm, template_name, form_source);
 			},
 			error() {
 				dialog.hide();

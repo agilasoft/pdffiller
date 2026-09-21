@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import re
 
 import frappe
@@ -42,6 +43,9 @@ DEFAULT_MAPPING = {
 	"options": "",
 	"text_maxlen": 0,
 	"comb": 0,
+	"repeat_table": "",
+	"repeat_field": "",
+	"repeat_slot": 0,
 }
 
 DATE_FORMATS = ["", "%d-%m-%Y", "%m/%d/%Y", "%Y-%m-%d", "%d/%m/%Y"]
@@ -122,6 +126,7 @@ def list_field_layout(pdf_path: str) -> list[dict]:
 				flags = int(getattr(widget, "field_flags", 0) or 0)
 				fields.append(
 					{
+						**DEFAULT_MAPPING,
 						"field_name": widget.field_name,
 						"field_type": field_type,
 						"page": page.number,
@@ -131,7 +136,6 @@ def list_field_layout(pdf_path: str) -> list[dict]:
 						"height": round(rect.height, 2),
 						"font_size": float(getattr(widget, "text_fontsize", 0) or 10),
 						"options": _widget_options(widget) if field_type == "Select" else "",
-						**DEFAULT_MAPPING,
 						"text_maxlen": int(getattr(widget, "text_maxlen", 0) or 0),
 						"comb": 1 if flags & fitz.PDF_TX_FIELD_IS_COMB else 0,
 					}
@@ -159,9 +163,12 @@ def merge_fields_with_mappings(pdf_fields: list[dict], template_doc) -> list[dic
 					"default_value": row.default_value or "",
 					"date_format": row.date_format or "",
 					"editable": int(row.editable or 0),
+					"repeat_table": getattr(row, "repeat_table", None) or "",
+					"repeat_field": getattr(row, "repeat_field", None) or "",
+					"repeat_slot": int(getattr(row, "repeat_slot", 0) or 0),
 				}
 			)
-			if row.field_type:
+			if getattr(row, "field_type", None):
 				merged_field["field_type"] = _normalize_field_type(row.field_type)
 		if merged_field["field_type"] == "Date" and not merged_field["date_format"]:
 			merged_field["date_format"] = "%d-%m-%Y"
@@ -214,6 +221,7 @@ def _validate_field_layout(fields: list[dict]) -> list[dict]:
 			height = float(field.get("height", 0))
 			font_size = float(field.get("font_size") or 10)
 			editable = int(field.get("editable") or 0)
+			repeat_slot = int(field.get("repeat_slot") or 0)
 		except (TypeError, ValueError):
 			frappe.throw(_("Invalid numeric value in field {0}").format(field_name))
 
@@ -254,6 +262,9 @@ def _validate_field_layout(fields: list[dict]) -> list[dict]:
 				"options": field.get("options") or "",
 				"text_maxlen": text_maxlen,
 				"comb": 1 if comb else 0,
+				"repeat_table": (field.get("repeat_table") or "").strip(),
+				"repeat_field": (field.get("repeat_field") or "").strip(),
+				"repeat_slot": max(0, repeat_slot),
 			}
 		)
 
@@ -321,6 +332,109 @@ def apply_field_layout(pdf_path: str, fields: list[dict]) -> bytes:
 		doc.close()
 
 
+def is_template_pdf_shared(file_url: str | None, template_name: str | None = None) -> bool:
+	"""True when another PDF Form Template points at the same file_url."""
+	if not file_url:
+		return False
+	names = frappe.get_all(
+		"PDF Form Template",
+		filters={"pdf_file": file_url},
+		pluck="name",
+	)
+	return any(name != template_name for name in names)
+
+
+def _template_pdf_basename(template_doc) -> str:
+	title = (
+		getattr(template_doc, "title", None)
+		or getattr(template_doc, "name", None)
+		or "template"
+	)
+	safe_name = re.sub(r"[^\w\-]+", "_", str(title).strip(), flags=re.UNICODE)
+	return (safe_name.strip("_")[:60] or "template") + ".pdf"
+
+
+def _template_attachment_name(template_doc) -> str | None:
+	name = getattr(template_doc, "name", None)
+	if not name or str(name).startswith("new-"):
+		return None
+	return str(name)
+
+
+def _unique_private_file_target(file_name: str) -> tuple[str, str]:
+	"""Return (file_url, abs_path) that is unused on disk and in File."""
+	from frappe.utils import get_files_path
+
+	base, ext = os.path.splitext(file_name)
+	candidate = file_name
+	index = 0
+	while True:
+		file_url = f"/private/files/{candidate}"
+		path = get_files_path(candidate, is_private=1)
+		if not os.path.exists(path) and not frappe.db.exists("File", {"file_url": file_url}):
+			return file_url, path
+		index += 1
+		candidate = f"{base}_{index}{ext}"
+
+
+def _write_pdf_bytes(path: str, pdf_bytes: bytes) -> None:
+	os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+	with open(path, "wb") as handle:
+		handle.write(pdf_bytes)
+		handle.flush()
+		os.fsync(handle.fileno())
+
+
+def _attached_file_name(template_doc, file_url: str) -> str | None:
+	attached_name = _template_attachment_name(template_doc)
+	if attached_name:
+		file_name = frappe.db.get_value(
+			"File",
+			{
+				"file_url": file_url,
+				"attached_to_doctype": "PDF Form Template",
+				"attached_to_name": attached_name,
+			},
+			"name",
+		)
+		if file_name:
+			return file_name
+	return frappe.db.get_value("File", {"file_url": file_url}, "name")
+
+
+def create_exclusive_template_pdf(template_doc, pdf_bytes: bytes) -> str:
+	"""Write a private PDF used only by this template and point pdf_file at it.
+
+	Bypasses Frappe content-hash reuse so two templates never share a path.
+	"""
+	from frappe.utils.file_manager import get_content_hash
+
+	file_url, pdf_path = _unique_private_file_target(_template_pdf_basename(template_doc))
+	_write_pdf_bytes(pdf_path, pdf_bytes)
+
+	attached_name = _template_attachment_name(template_doc)
+	file_doc = frappe.get_doc(
+		{
+			"doctype": "File",
+			"file_name": os.path.basename(file_url),
+			"file_url": file_url,
+			"is_private": 1,
+			"folder": "Home/Attachments",
+			"attached_to_doctype": "PDF Form Template" if attached_name else None,
+			"attached_to_name": attached_name,
+			"attached_to_field": "pdf_file" if attached_name else None,
+			"content_hash": get_content_hash(pdf_bytes),
+			"file_size": len(pdf_bytes),
+		}
+	)
+	file_doc.flags.copy_from_existing_file = True
+	file_doc.flags.ignore_duplicate_entry_error = True
+	file_doc.insert(ignore_permissions=True)
+
+	template_doc.pdf_file = file_url
+	return file_url
+
+
 def save_template_pdf(template_doc, pdf_bytes: bytes) -> None:
 	"""Overwrite the exact PDF file the template (and print) reference.
 
@@ -329,24 +443,24 @@ def save_template_pdf(template_doc, pdf_bytes: bytes) -> None:
 	content-hash dedupe. That writes the redesigned PDF to a different path
 	while print keeps reading the old URL — so Design Fields appears to save
 	but has no effect on actual output.
-	"""
-	import os
 
+	If another template shares this file_url, clone first so the write cannot
+	mutate the other form's layout.
+	"""
 	from frappe.utils.file_manager import get_content_hash
 
 	file_url = template_doc.pdf_file
 	if not file_url:
 		frappe.throw(_("PDF file is not attached"))
 
-	file_name = frappe.db.get_value("File", {"file_url": file_url}, "name")
+	if is_template_pdf_shared(file_url, _template_attachment_name(template_doc)):
+		file_url = create_exclusive_template_pdf(template_doc, pdf_bytes)
+
+	file_name = _attached_file_name(template_doc, file_url)
 	if not file_name:
 		frappe.throw(_("Attached PDF file record not found"))
 
-	pdf_path = get_pdf_path(file_url)
-	with open(pdf_path, "wb") as handle:
-		handle.write(pdf_bytes)
-		handle.flush()
-		os.fsync(handle.fileno())
+	_write_pdf_bytes(get_pdf_path(file_url), pdf_bytes)
 
 	frappe.db.set_value(
 		"File",
@@ -386,6 +500,9 @@ def sync_field_mappings(template_doc, fields: list[dict]) -> tuple[int, int]:
 				"default_value": field.get("default_value") or "",
 				"date_format": field.get("date_format") or "",
 				"editable": int(field.get("editable") or 0),
+				"repeat_table": (field.get("repeat_table") or "").strip(),
+				"repeat_field": (field.get("repeat_field") or "").strip(),
+				"repeat_slot": int(field.get("repeat_slot") or 0),
 			}
 		)
 

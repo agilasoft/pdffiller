@@ -5,13 +5,15 @@ import os
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import fitz
 
 from pdffiller.utils.pdf_designer import (
 	apply_field_layout,
+	create_exclusive_template_pdf,
 	get_page_previews,
+	is_template_pdf_shared,
 	list_field_layout,
 	merge_fields_with_mappings,
 	save_template_pdf,
@@ -201,6 +203,7 @@ class TestPdfDesigner(unittest.TestCase):
 		merged = merge_fields_with_mappings(pdf_fields, template_doc)
 		self.assertEqual(merged[0]["source_field"], "supplier_name")
 		self.assertEqual(merged[0]["editable"], 1)
+		self.assertEqual(merged[0].get("repeat_table", ""), "")
 
 	def test_merge_fields_with_mappings_preserves_field_type(self):
 		template_doc = SimpleNamespace(
@@ -234,6 +237,41 @@ class TestPdfDesigner(unittest.TestCase):
 		self.assertEqual(merged[0]["field_type"], "Barcode")
 		self.assertEqual(merged[0]["source_field"], "barcode")
 
+	def test_merge_fields_with_repeat_mapping(self):
+		template_doc = SimpleNamespace(
+			field_mappings=[
+				SimpleNamespace(
+					pdf_field_name="item_0",
+					field_type="Data",
+					source_type="Field Path",
+					source_field="item_code",
+					jinja_script="",
+					default_value="",
+					date_format="",
+					editable=0,
+					repeat_table="items",
+					repeat_field="item_code",
+					repeat_slot=0,
+				)
+			]
+		)
+		pdf_fields = [
+			{
+				"field_name": "item_0",
+				"field_type": "Data",
+				"page": 0,
+				"x": 72,
+				"y": 72,
+				"width": 150,
+				"height": 20,
+				"font_size": 10,
+				"options": "",
+			}
+		]
+		merged = merge_fields_with_mappings(pdf_fields, template_doc)
+		self.assertEqual(merged[0]["repeat_table"], "items")
+		self.assertEqual(merged[0]["repeat_slot"], 0)
+
 	def test_sync_field_mappings_with_mapping_data(self):
 		template_doc = SimpleNamespace(field_mappings=[])
 		template_doc.set = lambda fieldname, rows: setattr(template_doc, fieldname, rows)
@@ -257,6 +295,8 @@ class TestPdfDesigner(unittest.TestCase):
 		self.assertEqual(row["source_field"], "grand_total")
 		self.assertEqual(row["default_value"], "0")
 		self.assertEqual(row["field_type"], "Currency")
+		self.assertEqual(row["repeat_table"], "")
+		self.assertEqual(row["repeat_slot"], 0)
 
 	def test_save_template_pdf_overwrites_attached_path(self):
 		"""Design save must update the exact file_url path print reads."""
@@ -277,10 +317,12 @@ class TestPdfDesigner(unittest.TestCase):
 		]
 		pdf_bytes = apply_field_layout(attached_path, fields)
 		template_doc = SimpleNamespace(pdf_file="/files/template-abc123.pdf")
+		mock_db = MagicMock()
+		mock_db.get_value.return_value = "FILE-001"
 
-		with patch("pdffiller.utils.pdf_designer.frappe.db.get_value", return_value="FILE-001"), patch(
-			"pdffiller.utils.pdf_designer.frappe.db.set_value"
-		) as mock_set_value, patch(
+		with patch(
+			"pdffiller.utils.pdf_designer.is_template_pdf_shared", return_value=False
+		), patch("pdffiller.utils.pdf_designer.frappe.db", mock_db), patch(
 			"pdffiller.utils.pdf_designer.get_pdf_path", return_value=attached_path
 		), patch("frappe.utils.file_manager.get_content_hash", return_value="deadbeef"):
 			save_template_pdf(template_doc, pdf_bytes)
@@ -290,12 +332,118 @@ class TestPdfDesigner(unittest.TestCase):
 		self.assertEqual(layout[0]["field_name"], "customer_name")
 		self.assertAlmostEqual(layout[0]["x"], 120, places=1)
 		self.assertAlmostEqual(layout[0]["y"], 200, places=1)
-		mock_set_value.assert_called_once()
-		args = mock_set_value.call_args
+		mock_db.set_value.assert_called_once()
+		args = mock_db.set_value.call_args
 		self.assertEqual(args.args[0], "File")
 		self.assertEqual(args.args[1], "FILE-001")
 		self.assertEqual(args.args[2]["file_size"], len(pdf_bytes))
 		self.assertEqual(args.args[2]["content_hash"], "deadbeef")
+
+	def test_is_template_pdf_shared(self):
+		self.assertFalse(is_template_pdf_shared(""))
+		self.assertFalse(is_template_pdf_shared(None))
+		with patch(
+			"pdffiller.utils.pdf_designer.frappe.get_all",
+			return_value=["Airway Bill PROT", "MAWB PROT"],
+		):
+			self.assertTrue(is_template_pdf_shared("/private/files/x.pdf", "MAWB PROT"))
+			self.assertTrue(is_template_pdf_shared("/private/files/x.pdf", None))
+		with patch(
+			"pdffiller.utils.pdf_designer.frappe.get_all",
+			return_value=["MAWB PROT"],
+		):
+			self.assertFalse(is_template_pdf_shared("/private/files/x.pdf", "MAWB PROT"))
+			self.assertTrue(is_template_pdf_shared("/private/files/x.pdf", None))
+		with patch("pdffiller.utils.pdf_designer.frappe.get_all", return_value=[]):
+			self.assertFalse(is_template_pdf_shared("/private/files/x.pdf", "MAWB PROT"))
+
+	def test_save_template_pdf_clones_when_shared(self):
+		"""Shared file_url: write a new copy and leave the original bytes unchanged."""
+		original_path = os.path.join(self.tempdir, "shared.pdf")
+		exclusive_path = os.path.join(self.tempdir, "exclusive.pdf")
+		_make_plain_pdf(original_path)
+		with open(original_path, "rb") as handle:
+			original_bytes = handle.read()
+
+		fields = [
+			{
+				"field_name": "customer_name",
+				"field_type": "Data",
+				"page": 0,
+				"x": 120,
+				"y": 200,
+				"width": 180,
+				"height": 22,
+				"font_size": 10,
+			}
+		]
+		pdf_bytes = apply_field_layout(original_path, fields)
+		template_doc = SimpleNamespace(name="MAWB PROT", pdf_file="/files/shared.pdf")
+
+		def fake_clone(doc, _bytes):
+			doc.pdf_file = "/files/exclusive.pdf"
+			return doc.pdf_file
+
+		def fake_get_pdf_path(file_url):
+			if str(file_url).endswith("exclusive.pdf"):
+				return exclusive_path
+			return original_path
+
+		mock_db = MagicMock()
+		mock_db.get_value.return_value = "FILE-MAWB"
+
+		with patch(
+			"pdffiller.utils.pdf_designer.is_template_pdf_shared", return_value=True
+		), patch(
+			"pdffiller.utils.pdf_designer.create_exclusive_template_pdf", side_effect=fake_clone
+		), patch(
+			"pdffiller.utils.pdf_designer.get_pdf_path", side_effect=fake_get_pdf_path
+		), patch(
+			"pdffiller.utils.pdf_designer.frappe.db", mock_db
+		), patch(
+			"frappe.utils.file_manager.get_content_hash", return_value="newhash"
+		):
+			save_template_pdf(template_doc, pdf_bytes)
+
+		with open(original_path, "rb") as handle:
+			self.assertEqual(handle.read(), original_bytes)
+		self.assertEqual(template_doc.pdf_file, "/files/exclusive.pdf")
+		layout = list_field_layout(exclusive_path)
+		self.assertEqual(len(layout), 1)
+		self.assertEqual(layout[0]["field_name"], "customer_name")
+		mock_db.set_value.assert_called_once()
+		self.assertEqual(mock_db.set_value.call_args.args[1], "FILE-MAWB")
+
+	def test_create_exclusive_template_pdf_writes_new_path(self):
+		pdf_bytes = b"%PDF-1.4 exclusive"
+		template_doc = SimpleNamespace(
+			name="MAWB PROT",
+			title="MAWB PROT",
+			pdf_file="/private/files/shared.pdf",
+		)
+		exclusive_path = os.path.join(self.tempdir, "MAWB_PROT.pdf")
+		inserted = {}
+
+		class FakeFile:
+			def __init__(self):
+				self.flags = SimpleNamespace()
+
+			def insert(self, ignore_permissions=True):
+				inserted["ok"] = True
+
+		with patch(
+			"pdffiller.utils.pdf_designer._unique_private_file_target",
+			return_value=("/private/files/MAWB_PROT.pdf", exclusive_path),
+		), patch("pdffiller.utils.pdf_designer.frappe.get_doc", return_value=FakeFile()), patch(
+			"frappe.utils.file_manager.get_content_hash", return_value="abc"
+		):
+			url = create_exclusive_template_pdf(template_doc, pdf_bytes)
+
+		self.assertEqual(url, "/private/files/MAWB_PROT.pdf")
+		self.assertEqual(template_doc.pdf_file, url)
+		with open(exclusive_path, "rb") as handle:
+			self.assertEqual(handle.read(), pdf_bytes)
+		self.assertTrue(inserted["ok"])
 
 	@patch("pdffiller.api.designer.save_template_pdf")
 	@patch("pdffiller.api.designer.apply_field_layout")

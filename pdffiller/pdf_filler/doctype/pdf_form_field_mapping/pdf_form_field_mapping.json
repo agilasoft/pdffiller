@@ -12,7 +12,10 @@
   "jinja_script",
   "default_value",
   "date_format",
-  "editable"
+  "editable",
+  "repeat_table",
+  "repeat_field",
+  "repeat_slot"
  ],
  "fields": [
   {
@@ -70,6 +73,25 @@
    "in_list_view": 1,
    "label": "Editable",
    "description": "When unchecked, the field cannot be edited in the PDF filler side panel or directly in the embedded PDF."
+  },
+  {
+   "fieldname": "repeat_table",
+   "fieldtype": "Data",
+   "label": "Repeat Table",
+   "description": "Child table fieldname (e.g. items). Empty means a document-level field."
+  },
+  {
+   "fieldname": "repeat_field",
+   "fieldtype": "Data",
+   "label": "Repeat Field",
+   "description": "Column on the child table (e.g. item_code)"
+  },
+  {
+   "default": "0",
+   "fieldname": "repeat_slot",
+   "fieldtype": "Int",
+   "label": "Repeat Slot",
+   "description": "Row index on this template page (0 is the prototype row)"
   }
  ],
  "istable": 1,

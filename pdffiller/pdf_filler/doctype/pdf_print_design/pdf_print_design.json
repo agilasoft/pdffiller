@@ -2,7 +2,7 @@
  "actions": [],
  "allow_rename": 1,
  "autoname": "field:title",
- "creation": "2026-07-07 00:00:00.000000",
+ "creation": "2026-09-21 00:00:00.000000",
  "doctype": "DocType",
  "document_type": "Setup",
  "engine": "InnoDB",
@@ -14,11 +14,13 @@
   "disabled",
   "show_on_draft",
   "display_depends_on",
-  "section_break_pdf",
-  "pdf_file",
-  "fields_only",
+  "section_break_page",
+  "paper_size",
+  "page_width",
+  "page_height",
   "always_print_last",
   "page_roles",
+  "layout_json",
   "section_break_mappings",
   "field_mappings"
  ],
@@ -47,7 +49,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Group",
-   "description": "Custom menu button label for this form. Templates with the same group appear under one dropdown."
+   "description": "Custom menu button label for this form. Designs with the same group appear under one dropdown."
   },
   {
    "fieldname": "column_break_1",
@@ -73,22 +75,31 @@
    "description": "Optional condition to show this form in the custom Forms menu, e.g. eval:doc.party_type=='Customer'"
   },
   {
-   "fieldname": "section_break_pdf",
+   "fieldname": "section_break_page",
    "fieldtype": "Section Break",
-   "label": "PDF Template"
+   "label": "Page"
   },
   {
-   "fieldname": "pdf_file",
-   "fieldtype": "Attach",
-   "label": "PDF File",
-   "reqd": 1
+   "default": "A4",
+   "fieldname": "paper_size",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Paper Size",
+   "options": "A4\nLetter\nLegal\nCustom"
   },
   {
-   "default": "0",
-   "fieldname": "fields_only",
-   "fieldtype": "Check",
-   "label": "Fields only (no background)",
-   "description": "When enabled, print and download omit the PDF template background by default"
+   "default": "595",
+   "fieldname": "page_width",
+   "fieldtype": "Float",
+   "label": "Page Width (pt)",
+   "description": "PDF page width in points (72 pt = 1 inch)"
+  },
+  {
+   "default": "842",
+   "fieldname": "page_height",
+   "fieldtype": "Float",
+   "label": "Page Height (pt)",
+   "description": "PDF page height in points (72 pt = 1 inch)"
   },
   {
    "default": "0",
@@ -105,6 +116,13 @@
    "description": "Designer metadata: page index to First, Loop, Last, or Once"
   },
   {
+   "fieldname": "layout_json",
+   "fieldtype": "JSON",
+   "hidden": 1,
+   "label": "Layout JSON",
+   "description": "Designer-owned pages and static elements. Do not edit by hand."
+  },
+  {
    "fieldname": "section_break_mappings",
    "fieldtype": "Section Break",
    "label": "Field Mappings"
@@ -117,10 +135,10 @@
   }
  ],
  "links": [],
- "modified": "2026-07-07 00:00:00.000000",
+ "modified": "2026-09-21 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "PDF Filler",
- "name": "PDF Form Template",
+ "name": "PDF Print Design",
  "naming_rule": "By fieldname",
  "owner": "Administrator",
  "permissions": [

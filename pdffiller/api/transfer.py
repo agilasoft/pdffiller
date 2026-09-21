@@ -28,6 +28,8 @@ TEMPLATE_FIELDS = (
 	"show_on_draft",
 	"display_depends_on",
 	"fields_only",
+	"always_print_last",
+	"page_roles",
 )
 
 MAPPING_FIELDS = (
@@ -39,6 +41,9 @@ MAPPING_FIELDS = (
 	"default_value",
 	"date_format",
 	"editable",
+	"repeat_table",
+	"repeat_field",
+	"repeat_slot",
 )
 
 

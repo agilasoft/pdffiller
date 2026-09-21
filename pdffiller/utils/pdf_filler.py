@@ -288,7 +288,8 @@ def fill_pdf_fields_only(
 						comb_slots=_widget_comb_slots(widget),
 					)
 
-		return output_doc.tobytes(garbage=4, deflate=True)
+		# Skip garbage=4: it takes seconds on BIR face PDFs and barely shrinks them.
+		return output_doc.tobytes()
 	finally:
 		template_doc.close()
 		output_doc.close()
@@ -349,7 +350,8 @@ def fill_pdf(
 				if field_name in readonly_fields:
 					widget.field_flags = widget.field_flags | fitz.PDF_FIELD_IS_READ_ONLY
 				widget.update()
-		return doc.tobytes(garbage=4, deflate=True)
+		# Skip garbage=4: it takes seconds on BIR face PDFs and barely shrinks them.
+		return doc.tobytes()
 	finally:
 		doc.close()
 
@@ -405,6 +407,17 @@ def fill_template_pdf(
 		frappe.throw(frappe._("PDF Form Template has no PDF file attached"))
 
 	pdf_path = get_pdf_path(template_doc.pdf_file)
+	from pdffiller.utils.looping_fill import fill_looping_template, should_use_looping_fill
+
+	if should_use_looping_fill(template_doc, pdf_path):
+		return fill_looping_template(
+			template_doc,
+			source_doc,
+			pdf_path,
+			overrides=overrides,
+			fields_only=fields_only,
+		)
+
 	form_data = build_form_data(template_doc, source_doc, overrides=overrides)
 	barcode_fields = _get_barcode_fields(template_doc)
 	image_fields = _get_image_fields(template_doc)
