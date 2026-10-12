@@ -157,6 +157,18 @@ class TestFieldResolver(unittest.TestCase):
 		doc = FakeDoc({"name": "DOC-001"})
 		self.assertEqual(render_jinja_template("", doc), "")
 
+	@patch("pdffiller.utils.field_resolver.frappe.log_error")
+	@patch("pdffiller.utils.field_resolver.frappe.render_template", side_effect=Exception("bad template"))
+	def test_jinja_error_records_warning(self, _render, _log):
+		from pdffiller.utils.fill_warnings import capture_warnings
+
+		doc = FakeDoc({"name": "DOC-001"})
+		with capture_warnings() as warnings:
+			value = render_jinja_template("{{ doc.missing }}", doc, field_name="Payee")
+		self.assertEqual(value, "")
+		self.assertEqual(warnings[0]["field"], "Payee")
+		self.assertIn("bad template", warnings[0]["message"])
+
 
 if __name__ == "__main__":
 	unittest.main()

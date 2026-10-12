@@ -25,7 +25,9 @@ FRAPPE_FIELD_TYPES = frozenset(
 		"Small Text",
 		"Long Text",
 		"Barcode",
+		"QR Code",
 		"Image",
+		"Signature",
 		# Legacy aliases
 		"Text",
 		"Checkbox",

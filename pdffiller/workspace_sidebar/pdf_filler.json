@@ -45,6 +45,18 @@
   {
    "child": 0,
    "collapsible": 1,
+   "icon": "list",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Packets",
+   "link_to": "PDF Form Packet",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
    "icon": "edit",
    "indent": 0,
    "keep_closed": 0,
@@ -63,6 +75,18 @@
    "label": "PDF Print Designer",
    "link_to": "pdf-print-designer",
    "link_type": "Page",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "history",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Generation Log",
+   "link_to": "PDF Form Generation Log",
+   "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link"
   },

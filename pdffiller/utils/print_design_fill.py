@@ -23,7 +23,8 @@ from pdffiller.utils.pdf_filler import (
 	_draw_special_field,
 	_draw_text_field,
 	_get_barcode_fields,
-	_get_image_fields,
+	_get_image_like_fields,
+	_get_qr_fields,
 	_is_truthy_checkbox_value,
 )
 from pdffiller.utils.print_layout import (
@@ -69,7 +70,8 @@ def fill_print_design(design_doc, source_doc, overrides: dict[str, str] | None =
 		frappe.throw(_(str(exc) or "Line items do not fit this template. Add a Loop page."))
 
 	barcode_fields = _get_barcode_fields(design_doc)
-	image_fields = _get_image_fields(design_doc)
+	image_fields = _get_image_like_fields(design_doc)
+	qr_fields = _get_qr_fields(design_doc)
 	fields_by_page = _fields_by_page(field_layout)
 	page_width = float(layout["page_width"])
 	page_height = float(layout["page_height"])
@@ -90,6 +92,7 @@ def fill_print_design(design_doc, source_doc, overrides: dict[str, str] | None =
 				page_spec,
 				barcode_fields,
 				image_fields,
+				qr_fields=qr_fields,
 			)
 		return output.tobytes()
 	finally:
@@ -168,6 +171,9 @@ def _draw_static_elements(page, elements: list[dict]) -> None:
 				continue
 			data = resolve_image_bytes(url)
 			if not data:
+				from pdffiller.utils.fill_warnings import add_warning
+
+				add_warning("Image", "Could not render image")
 				continue
 			rect = fitz.Rect(x, y, x + max(width, 4), y + max(height, 4))
 			page.insert_image(rect, stream=data, keep_proportion=True)
@@ -183,6 +189,7 @@ def _draw_bound_fields(
 	page_spec: OutputPage,
 	barcode_fields,
 	image_fields,
+	qr_fields=None,
 ) -> None:
 	import fitz
 
@@ -204,7 +211,9 @@ def _draw_bound_fields(
 			float(field.get("x") or 0) + max(float(field.get("width") or 0), 4),
 			float(field.get("y") or 0) + max(float(field.get("height") or 0), 4),
 		)
-		if _draw_special_field(page, rect, value, name, barcode_fields, image_fields):
+		if _draw_special_field(
+			page, rect, value, name, barcode_fields, image_fields, qr_fields=qr_fields
+		):
 			continue
 		field_type = (field.get("field_type") or mapping_get(mappings.get(name), "field_type", "Data") or "Data")
 		if field_type in ("Check", "Checkbox"):

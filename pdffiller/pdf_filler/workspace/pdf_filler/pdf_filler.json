@@ -1,7 +1,7 @@
 {
  "app": "pdffiller",
  "charts": [],
- "content": "[{\"id\":\"pfd-hdr\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>PDF Filler</b></span>\",\"col\":12}},{\"id\":\"pfd-sc-templates\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Form Template\",\"col\":4}},{\"id\":\"pfd-sc-print-design\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Print Design\",\"col\":4}},{\"id\":\"pfd-sc-designer\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Field Designer\",\"col\":4}},{\"id\":\"pfd-sc-print-designer\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Print Designer\",\"col\":4}},{\"id\":\"pfd-sc-ai\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Filler AI Settings\",\"col\":4}}]",
+ "content": "[{\"id\":\"pfd-hdr\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>PDF Filler</b></span>\",\"col\":12}},{\"id\":\"pfd-sc-templates\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Form Template\",\"col\":4}},{\"id\":\"pfd-sc-print-design\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Print Design\",\"col\":4}},{\"id\":\"pfd-sc-packet\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Form Packet\",\"col\":4}},{\"id\":\"pfd-sc-designer\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Field Designer\",\"col\":4}},{\"id\":\"pfd-sc-print-designer\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Print Designer\",\"col\":4}},{\"id\":\"pfd-sc-log\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Form Generation Log\",\"col\":4}},{\"id\":\"pfd-sc-ai\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"PDF Filler AI Settings\",\"col\":4}}]",
  "creation": "2026-07-07 00:00:00",
  "custom_blocks": [],
  "docstatus": 0,
@@ -36,6 +36,16 @@
   {
    "hidden": 0,
    "is_query_report": 0,
+   "label": "Packets",
+   "link_count": 0,
+   "link_to": "PDF Form Packet",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
    "label": "PDF Field Designer",
    "link_count": 0,
    "link_to": "pdf-field-designer",
@@ -50,6 +60,16 @@
    "link_count": 0,
    "link_to": "pdf-print-designer",
    "link_type": "Page",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Generation Log",
+   "link_count": 0,
+   "link_to": "PDF Form Generation Log",
+   "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
   },
@@ -91,6 +111,13 @@
    "type": "DocType"
   },
   {
+   "color": "Blue",
+   "doc_view": "List",
+   "label": "PDF Form Packet",
+   "link_to": "PDF Form Packet",
+   "type": "DocType"
+  },
+  {
    "color": "Orange",
    "doc_view": "",
    "label": "PDF Field Designer",
@@ -103,6 +130,13 @@
    "label": "PDF Print Designer",
    "link_to": "pdf-print-designer",
    "type": "Page"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "PDF Form Generation Log",
+   "link_to": "PDF Form Generation Log",
+   "type": "DocType"
   },
   {
    "color": "Grey",

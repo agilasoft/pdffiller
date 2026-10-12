@@ -188,24 +188,67 @@ def _draw_checkbox(page, rect, checked: bool) -> None:
 		)
 
 
-def _draw_barcode(page, rect, value: str) -> None:
+def _warn_draw_failure(field_name: str, message: str) -> None:
+	from pdffiller.utils.fill_warnings import add_warning
+
+	add_warning(field_name, message)
+
+
+def _draw_barcode(page, rect, value: str, field_name: str = "") -> None:
 	from pdffiller.utils.barcode_renderer import generate_barcode_png
 
-	png_bytes = generate_barcode_png(value)
+	try:
+		png_bytes = generate_barcode_png(value)
+	except Exception as exc:
+		_warn_draw_failure(field_name, f"Could not render barcode: {exc}")
+		return
 	if not png_bytes:
+		if (value or "").strip():
+			_warn_draw_failure(field_name, "Could not render barcode")
 		return
 
-	page.insert_image(rect, stream=png_bytes, keep_proportion=True)
+	try:
+		page.insert_image(rect, stream=png_bytes, keep_proportion=True)
+	except Exception as exc:
+		_warn_draw_failure(field_name, f"Could not render barcode: {exc}")
 
 
-def _draw_image(page, rect, value: str) -> None:
+def _draw_qr(page, rect, value: str, field_name: str = "") -> None:
+	from pdffiller.utils.qr_renderer import generate_qr_png
+
+	try:
+		png_bytes = generate_qr_png(value)
+	except Exception as exc:
+		_warn_draw_failure(field_name, f"Could not render QR code: {exc}")
+		return
+	if not png_bytes:
+		if (value or "").strip():
+			_warn_draw_failure(field_name, "Could not render QR code")
+		return
+
+	try:
+		page.insert_image(rect, stream=png_bytes, keep_proportion=True)
+	except Exception as exc:
+		_warn_draw_failure(field_name, f"Could not render QR code: {exc}")
+
+
+def _draw_image(page, rect, value: str, field_name: str = "") -> None:
 	from pdffiller.utils.image_renderer import resolve_image_bytes
 
-	image_bytes = resolve_image_bytes(value)
+	try:
+		image_bytes = resolve_image_bytes(value)
+	except Exception as exc:
+		_warn_draw_failure(field_name, f"Could not render image: {exc}")
+		return
 	if not image_bytes:
+		if (value or "").strip():
+			_warn_draw_failure(field_name, "Could not render image")
 		return
 
-	page.insert_image(rect, stream=image_bytes, keep_proportion=True)
+	try:
+		page.insert_image(rect, stream=image_bytes, keep_proportion=True)
+	except Exception as exc:
+		_warn_draw_failure(field_name, f"Could not render image: {exc}")
 
 
 def _get_fields_by_type(template_doc, field_type: str) -> set[str]:
@@ -220,18 +263,39 @@ def _get_barcode_fields(template_doc) -> set[str]:
 	return _get_fields_by_type(template_doc, "Barcode")
 
 
+def _get_qr_fields(template_doc) -> set[str]:
+	return _get_fields_by_type(template_doc, "QR Code")
+
+
 def _get_image_fields(template_doc) -> set[str]:
 	return _get_fields_by_type(template_doc, "Image")
 
 
-def _draw_special_field(page, rect, value: str, field_name: str, barcode_fields, image_fields) -> bool:
+def _get_image_like_fields(template_doc) -> set[str]:
+	return _get_image_fields(template_doc) | _get_fields_by_type(template_doc, "Signature")
+
+
+def _draw_special_field(
+	page,
+	rect,
+	value: str,
+	field_name: str,
+	barcode_fields,
+	image_fields,
+	qr_fields=None,
+) -> bool:
+	qr_fields = qr_fields or set()
 	if field_name in barcode_fields:
 		if (value or "").strip():
-			_draw_barcode(page, rect, value)
+			_draw_barcode(page, rect, value, field_name)
+		return True
+	if field_name in qr_fields:
+		if (value or "").strip():
+			_draw_qr(page, rect, value, field_name)
 		return True
 	if field_name in image_fields:
 		if (value or "").strip():
-			_draw_image(page, rect, value)
+			_draw_image(page, rect, value, field_name)
 		return True
 	return False
 
@@ -241,11 +305,13 @@ def fill_pdf_fields_only(
 	form_data: dict[str, str],
 	barcode_fields: set[str] | None = None,
 	image_fields: set[str] | None = None,
+	qr_fields: set[str] | None = None,
 ) -> bytes:
 	import fitz
 
 	barcode_fields = barcode_fields or set()
 	image_fields = image_fields or set()
+	qr_fields = qr_fields or set()
 	template_doc = fitz.open(template_path)
 	output_doc = fitz.open()
 	try:
@@ -273,7 +339,13 @@ def fill_pdf_fields_only(
 
 				widget_rect = widget.rect
 				if _draw_special_field(
-					output_page, widget_rect, value, field_name, barcode_fields, image_fields
+					output_page,
+					widget_rect,
+					value,
+					field_name,
+					barcode_fields,
+					image_fields,
+					qr_fields=qr_fields,
 				):
 					continue
 				if widget.field_type_string in ("CheckBox", "Checkbox"):
@@ -301,12 +373,14 @@ def fill_pdf(
 	readonly_fields: set[str] | None = None,
 	barcode_fields: set[str] | None = None,
 	image_fields: set[str] | None = None,
+	qr_fields: set[str] | None = None,
 ) -> bytes:
 	import fitz
 
 	readonly_fields = readonly_fields or set()
 	barcode_fields = barcode_fields or set()
 	image_fields = image_fields or set()
+	qr_fields = qr_fields or set()
 	doc = fitz.open(template_path)
 	try:
 		for page in doc:
@@ -340,10 +414,16 @@ def fill_pdf(
 				widget = widgets.get(field_name)
 				if not widget:
 					continue
-				if field_name in barcode_fields or field_name in image_fields:
+				if field_name in barcode_fields or field_name in image_fields or field_name in qr_fields:
 					_set_widget_value(widget, "")
 					_draw_special_field(
-						page, widget.rect, value, field_name, barcode_fields, image_fields
+						page,
+						widget.rect,
+						value,
+						field_name,
+						barcode_fields,
+						image_fields,
+						qr_fields=qr_fields,
 					)
 				else:
 					_set_widget_value(widget, value)
@@ -384,6 +464,7 @@ def build_field_preview(template_doc, source_doc) -> list[dict]:
 				"value": resolve_mapping_value(source_doc, row),
 				"editable": bool(row.editable),
 				"source_type": row.source_type or "Field Path",
+				"field_type": getattr(row, "field_type", None) or "",
 			}
 		)
 	return fields
@@ -420,13 +501,15 @@ def fill_template_pdf(
 
 	form_data = build_form_data(template_doc, source_doc, overrides=overrides)
 	barcode_fields = _get_barcode_fields(template_doc)
-	image_fields = _get_image_fields(template_doc)
+	image_fields = _get_image_like_fields(template_doc)
+	qr_fields = _get_qr_fields(template_doc)
 	if fields_only:
 		return fill_pdf_fields_only(
 			pdf_path,
 			form_data,
 			barcode_fields=barcode_fields,
 			image_fields=image_fields,
+			qr_fields=qr_fields,
 		)
 
 	readonly_fields = _get_readonly_fields(template_doc)
@@ -436,4 +519,5 @@ def fill_template_pdf(
 		readonly_fields=readonly_fields,
 		barcode_fields=barcode_fields,
 		image_fields=image_fields,
+		qr_fields=qr_fields,
 	)

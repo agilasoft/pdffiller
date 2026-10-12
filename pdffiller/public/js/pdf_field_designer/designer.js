@@ -17,7 +17,9 @@ frappe.provide("pdffiller.designer");
 		{ type: "Small Text", icon: "align-left", label: __("Small Text"), width: 200, height: 40, font_size: 10 },
 		{ type: "Long Text", icon: "align-left", label: __("Long Text"), width: 200, height: 60, font_size: 10 },
 		{ type: "Barcode", icon: "barcode", label: __("Barcode"), width: 180, height: 48, font_size: 10 },
+		{ type: "QR Code", icon: "tag", label: __("QR Code"), width: 90, height: 90, font_size: 10 },
 		{ type: "Image", icon: "image", label: __("Image"), width: 120, height: 120, font_size: 10 },
+		{ type: "Signature", icon: "edit", label: __("Signature"), width: 180, height: 60, font_size: 10 },
 	];
 
 	const MIN_WIDTH_PT = 20;
@@ -37,6 +39,8 @@ frappe.provide("pdffiller.designer");
 
 	let state = {
 		templateName: null,
+		sampleValues: null,
+		sampleDoc: "",
 		title: "",
 		reference_doctype: "",
 		pages: [],
@@ -668,6 +672,64 @@ frappe.provide("pdffiller.designer");
 		render();
 	}
 
+	function loadSampleDocument() {
+		if (!state.reference_doctype || !state.templateName) return;
+		if (state.sampleDoc) {
+			state.sampleValues = null;
+			state.sampleDoc = "";
+			render();
+			return;
+		}
+		const dialog = new frappe.ui.Dialog({
+			title: __("Sample document"),
+			fields: [
+				{
+					fieldtype: "Link",
+					options: state.reference_doctype,
+					fieldname: "name",
+					label: __("Document"),
+					reqd: 1,
+				},
+			],
+			primary_action_label: __("Show values"),
+			primary_action(values) {
+				dialog.hide();
+				frappe.call({
+					method: "pdffiller.api.forms.get_sample_values",
+					args: {
+						template: state.templateName,
+						doctype: state.reference_doctype,
+						name: values.name,
+						fields: JSON.stringify(getFieldsPayload()),
+						source: "form_template",
+					},
+					freeze: true,
+					callback(r) {
+						const data = r.message || {};
+						state.sampleValues = data.values || {};
+						state.sampleDoc = values.name;
+						if (data.warnings && data.warnings.length) {
+							frappe.msgprint({
+								title: __("Some values could not be filled"),
+								indicator: "orange",
+								message: data.warnings
+									.map(
+										(warning) =>
+											`${frappe.utils.escape_html(warning.field || "")}: ${frappe.utils.escape_html(
+												warning.message || ""
+											)}`
+									)
+									.join("<br>"),
+							});
+						}
+						render();
+					},
+				});
+			},
+		});
+		dialog.show();
+	}
+
 	function previewWithDocument() {
 		if (!state.reference_doctype || !state.templateName) return;
 		if (state.dirty) {
@@ -844,7 +906,8 @@ frappe.provide("pdffiller.designer");
 		const top = ptToPx(field.y);
 		const width = ptToPx(field.width);
 		const height = ptToPx(field.height);
-		const label = frappe.utils.escape_html(field.field_name);
+		const sample = state.sampleValues && state.sampleValues[field.field_name];
+		const label = frappe.utils.escape_html(sample || field.field_name);
 		const typeLabel = frappe.utils.escape_html(field.field_type);
 		const mapLabel = field.repeat_table
 			? frappe.utils.escape_html(
@@ -857,9 +920,9 @@ frappe.provide("pdffiller.designer");
 				: __("Unmapped");
 
 		const specialClass =
-			field.field_type === "Barcode"
+			field.field_type === "Barcode" || field.field_type === "QR Code"
 				? " pfd-field-overlay--barcode"
-				: field.field_type === "Image"
+				: field.field_type === "Image" || field.field_type === "Signature"
 					? " pfd-field-overlay--image"
 					: "";
 		const previewHtml =
@@ -948,7 +1011,9 @@ frappe.provide("pdffiller.designer");
 			return `<div class="pfd-empty-props">${__("Select a field to edit layout and mapping")}</div>`;
 		}
 
-		const showFont = !["Check", "Select", "Barcode", "Image"].includes(field.field_type);
+		const showFont = !["Check", "Select", "Barcode", "QR Code", "Image", "Signature"].includes(
+			field.field_type
+		);
 		const showDateFormat = field.field_type === "Date" || field.date_format;
 		const showOptions = field.field_type === "Select";
 		const showSourceField = field.source_type !== "Jinja Script";
@@ -1131,6 +1196,9 @@ frappe.provide("pdffiller.designer");
 						${frappe.utils.icon("magic", "xs")}
 						${__("AI Assist")}
 					</button>
+					<button type="button" class="btn btn-default btn-sm pfd-sample-btn">${
+						state.sampleDoc ? __("Clear sample") : __("Sample")
+					}</button>
 					<button type="button" class="btn btn-default btn-sm pfd-preview-btn">${__("Preview")}</button>
 					<button type="button" class="btn btn-default btn-sm pfd-cancel-btn">${__("Back")}</button>
 					<button type="button" class="btn btn-primary btn-sm pfd-save-btn">${__("Save Design")}</button>
@@ -1240,6 +1308,7 @@ frappe.provide("pdffiller.designer");
 
 	function bindEvents(app) {
 		app.querySelector(".pfd-ai-btn")?.addEventListener("click", openAIAssist);
+		app.querySelector(".pfd-sample-btn")?.addEventListener("click", loadSampleDocument);
 		app.querySelector(".pfd-save-btn")?.addEventListener("click", saveDesign);
 		app.querySelector(".pfd-preview-btn")?.addEventListener("click", previewWithDocument);
 		app.querySelector(".pfd-cancel-btn")?.addEventListener("click", () => {

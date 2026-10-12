@@ -25,7 +25,10 @@ doctype_js = {
 	"PDF Form Template": "public/js/pdf_form_template.js",
 	"PDF Print Design": "public/js/pdf_print_design.js",
 }
-doctype_list_js = {"PDF Form Template": "public/js/pdf_form_template_list.js"}
+doctype_list_js = {
+	"PDF Form Template": "public/js/pdf_form_template_list.js",
+	"PDF Print Design": "public/js/pdf_print_design_list.js",
+}
 
 extend_bootinfo = "pdffiller.boot.extend_bootinfo"
 after_install = "pdffiller.install.after_install"

@@ -6,3 +6,4 @@
 pdffiller.patches.v1_0.sync_pdf_filler_desk
 pdffiller.patches.v1_0.split_shared_template_pdfs
 pdffiller.patches.v1_0.sync_print_design_desk
+pdffiller.patches.v1_0.sync_form_workflow_desk
