@@ -11,12 +11,15 @@ frappe.provide("pdffiller.print_designer");
 		{ type: "Date", icon: "calendar", label: __("Date Field"), width: 100, height: 20, font_size: 10, date_format: "%d-%m-%Y" },
 		{ type: "Currency", icon: "money", label: __("Currency Field"), width: 100, height: 20, font_size: 10 },
 		{ type: "Int", icon: "hash", label: __("Number Field"), width: 80, height: 20, font_size: 10 },
+		{ type: "Float", icon: "hash", label: __("Float"), width: 90, height: 20, font_size: 10 },
 		{ type: "Check", icon: "check", label: __("Check Box"), width: 14, height: 14, font_size: 10 },
 		{ type: "Select", icon: "list", label: __("Select Field"), width: 120, height: 20, font_size: 10, options: "Option 1\nOption 2" },
 		{ type: "Small Text", icon: "align-left", label: __("Small Text"), width: 200, height: 40, font_size: 10 },
 		{ type: "Long Text", icon: "align-left", label: __("Long Text"), width: 200, height: 60, font_size: 10 },
 		{ type: "Barcode", icon: "barcode", label: __("Barcode"), width: 180, height: 48, font_size: 10 },
+		{ type: "QR Code", icon: "tag", label: __("QR Code"), width: 90, height: 90, font_size: 10 },
 		{ type: "Image", icon: "image", label: __("Image Field"), width: 120, height: 120, font_size: 10 },
+		{ type: "Signature", icon: "edit", label: __("Signature"), width: 180, height: 60, font_size: 10 },
 	];
 
 	const DRAW_TOOLS = [
@@ -70,6 +73,9 @@ frappe.provide("pdffiller.print_designer");
 		zoom: 0.5,
 		always_print_last: 0,
 		child_tables: [],
+		sampleValues: null,
+		sampleDoc: "",
+		aiEnabled: false,
 	};
 
 	function getDesignName() {
@@ -282,6 +288,7 @@ frappe.provide("pdffiller.print_designer");
 					pageInstance.set_title(state.title || __("PDF Print Designer"));
 				}
 				render();
+				refreshAIStatus();
 			},
 			error() {
 				showMessage(__("Failed to load the print designer."));
@@ -604,6 +611,141 @@ frappe.provide("pdffiller.print_designer");
 		}
 		markDirty();
 		render();
+	}
+
+	function getFieldsPayload() {
+		const fields = [];
+		(state.layout.pages || []).forEach((page, pageIndex) => {
+			(page.elements || []).forEach((element) => {
+				if (element.kind !== "field") return;
+				fields.push({
+					field_name: (element.field_name || "").trim(),
+					field_type: element.field_type,
+					page: pageIndex,
+					source_type: element.source_type || "Field Path",
+					source_field: element.source_field || "",
+					jinja_script: element.jinja_script || "",
+					default_value: element.default_value || "",
+					date_format: element.date_format || "",
+					editable: element.editable ? 1 : 0,
+					repeat_table: element.repeat_table || "",
+					repeat_field: element.repeat_field || "",
+					repeat_slot: Number(element.repeat_slot || 0),
+				});
+			});
+		});
+		return fields;
+	}
+
+	function applyAISuggestions(suggestions) {
+		if (!suggestions?.length) return;
+		let applied = 0;
+		(state.layout.pages || []).forEach((page) => {
+			(page.elements || []).forEach((element) => {
+				if (element.kind !== "field") return;
+				const suggestion = suggestions.find((row) => row.pdf_field_name === element.field_name);
+				if (!suggestion) return;
+				element.source_type = suggestion.source_type || "Field Path";
+				element.source_field = suggestion.source_field || "";
+				element.jinja_script = suggestion.jinja_script || "";
+				applied += 1;
+			});
+		});
+		if (!applied) {
+			frappe.show_alert({ message: __("No matching fields to update."), indicator: "orange" });
+			return;
+		}
+		markDirty();
+		render();
+		frappe.show_alert({
+			message: __("{0} mapping(s) applied", [applied]),
+			indicator: "green",
+		});
+	}
+
+	function openAIAssist() {
+		if (!pdffiller.designer || !pdffiller.designer.ai) return;
+		pdffiller.designer.ai.open({
+			templateName: state.designName,
+			source: "print_design",
+			referenceDoctype: state.reference_doctype,
+			getFields() {
+				return getFieldsPayload();
+			},
+			applySuggestions: applyAISuggestions,
+		});
+	}
+
+	function refreshAIStatus() {
+		if (!pdffiller.designer || !pdffiller.designer.ai) return;
+		const apply = (enabled) => {
+			state.aiEnabled = enabled;
+			const btn = document.querySelector(".ppd-topbar .pfd-ai-btn");
+			if (btn) btn.classList.toggle("hidden", !enabled);
+		};
+		if (pdffiller.designer.ai.isEnabled()) {
+			apply(true);
+			return;
+		}
+		pdffiller.designer.ai.refreshStatus(apply);
+	}
+
+	function loadSampleDocument() {
+		if (!state.reference_doctype || !state.designName) return;
+		if (state.sampleDoc) {
+			state.sampleValues = null;
+			state.sampleDoc = "";
+			render();
+			return;
+		}
+		const dialog = new frappe.ui.Dialog({
+			title: __("Sample document"),
+			fields: [
+				{
+					fieldtype: "Link",
+					options: state.reference_doctype,
+					fieldname: "name",
+					label: __("Document"),
+					reqd: 1,
+				},
+			],
+			primary_action_label: __("Show values"),
+			primary_action(values) {
+				dialog.hide();
+				frappe.call({
+					method: "pdffiller.api.forms.get_sample_values",
+					args: {
+						template: state.designName,
+						doctype: state.reference_doctype,
+						name: values.name,
+						fields: JSON.stringify(getFieldsPayload()),
+						source: "print_design",
+					},
+					freeze: true,
+					callback(r) {
+						const data = r.message || {};
+						state.sampleValues = data.values || {};
+						state.sampleDoc = values.name;
+						if (data.warnings && data.warnings.length) {
+							frappe.msgprint({
+								title: __("Some values could not be filled"),
+								indicator: "orange",
+								message: data.warnings
+									.map(
+										(warning) =>
+											`${frappe.utils.escape_html(warning.field || "")}: ${frappe.utils.escape_html(
+												warning.message || ""
+											)}`
+									)
+									.join("<br>"),
+							});
+						}
+						render();
+					},
+				});
+			},
+		});
+		dialog.show();
 	}
 
 	function previewWithDocument() {
@@ -932,9 +1074,9 @@ frappe.provide("pdffiller.print_designer");
 			: field.source_field || field.field_name;
 		const typeLabel = field.field_type || "Data";
 		const specialClass =
-			field.field_type === "Barcode"
+			field.field_type === "Barcode" || field.field_type === "QR Code"
 				? " pfd-field-overlay--barcode"
-				: field.field_type === "Image"
+				: field.field_type === "Image" || field.field_type === "Signature"
 					? " pfd-field-overlay--image"
 					: "";
 		const barcode = field.field_type === "Barcode"
@@ -944,13 +1086,14 @@ frappe.provide("pdffiller.print_designer");
 			: "";
 		const image =
 			field.field_type === "Image" ? renderImagePreview(field.default_value || "") : "";
+		const sample = state.sampleValues && state.sampleValues[field.field_name];
 		return `<div
 			class="pfd-field-overlay${selected}${specialClass}${repeatClass}"
 			data-element-id="${frappe.utils.escape_html(field.id)}"
 			style="${boxStyle(field)}"
 		>
 			${barcode}${image}
-			<span class="pfd-field-label">${frappe.utils.escape_html(field.field_name)}</span>
+			<span class="pfd-field-label">${frappe.utils.escape_html(sample || field.field_name)}</span>
 			<span class="pfd-field-meta">${frappe.utils.escape_html(typeLabel)} · ${frappe.utils.escape_html(
 				mapLabel
 			)}</span>
@@ -1278,7 +1421,9 @@ frappe.provide("pdffiller.print_designer");
 	}
 
 	function renderFieldProperties(field) {
-		const showFont = !["Check", "Select", "Barcode", "Image"].includes(field.field_type);
+		const showFont = !["Check", "Select", "Barcode", "QR Code", "Image", "Signature"].includes(
+			field.field_type
+		);
 		const showDateFormat = field.field_type === "Date" || field.date_format;
 		const showOptions = field.field_type === "Select";
 		const showSourceField = field.source_type !== "Jinja Script";
@@ -1459,6 +1604,12 @@ frappe.provide("pdffiller.print_designer");
 						<span class="ppd-unsaved${state.dirty ? "" : " is-saved"}">${
 							state.dirty ? __("Not Saved") : __("Saved")
 						}</span>
+						<button type="button" class="btn btn-default btn-sm pfd-ai-btn${
+							state.aiEnabled ? "" : " hidden"
+						}">${__("AI Assist")}</button>
+						<button type="button" class="btn btn-default btn-sm pfd-sample-btn">${
+							state.sampleDoc ? __("Clear sample") : __("Sample")
+						}</button>
 						<button type="button" class="btn btn-default btn-sm pfd-preview-btn">${__("Preview")}</button>
 						<button type="button" class="btn btn-default btn-sm pfd-cancel-btn">${__("Back")}</button>
 						<button type="button" class="btn btn-primary btn-sm pfd-save-btn">${__("Save Design")}</button>
@@ -1559,6 +1710,8 @@ frappe.provide("pdffiller.print_designer");
 
 	function bindEvents(app) {
 		app.querySelector(".pfd-save-btn")?.addEventListener("click", saveDesign);
+		app.querySelector(".pfd-ai-btn")?.addEventListener("click", openAIAssist);
+		app.querySelector(".pfd-sample-btn")?.addEventListener("click", loadSampleDocument);
 		app.querySelector(".pfd-preview-btn")?.addEventListener("click", previewWithDocument);
 		app.querySelector(".pfd-cancel-btn")?.addEventListener("click", () => {
 			if (state.dirty && !confirm(__("Discard unsaved changes?"))) return;

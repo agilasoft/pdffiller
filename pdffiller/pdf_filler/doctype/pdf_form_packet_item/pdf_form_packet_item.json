@@ -1,0 +1,40 @@
+{
+ "actions": [],
+ "creation": "2026-10-12 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "form_source",
+  "form_name"
+ ],
+ "fields": [
+  {
+   "fieldname": "form_source",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Form",
+   "options": "PDF Form Template\nPDF Print Design",
+   "reqd": 1
+  },
+  {
+   "fieldname": "form_name",
+   "fieldtype": "Dynamic Link",
+   "in_list_view": 1,
+   "label": "Name",
+   "options": "form_source",
+   "reqd": 1
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-10-12 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "PDF Filler",
+ "name": "PDF Form Packet Item",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -96,7 +96,7 @@ def _parse_json_from_content(content: str) -> dict:
 
 def _build_designer_context(template_doc, fields: list[dict] | None = None) -> str:
 	reference_fields = _get_reference_fields(template_doc.reference_doctype)
-	if fields is None and template_doc.pdf_file:
+	if fields is None and getattr(template_doc, "pdf_file", None):
 		pdf_path = get_pdf_path(template_doc.pdf_file)
 		pdf_fields = list_field_layout(pdf_path)
 		fields = merge_fields_with_mappings(pdf_fields, template_doc)
@@ -164,11 +164,27 @@ def _normalize_suggestions(raw_suggestions: list, reference_fieldnames: set[str]
 	return out
 
 
+def _load_design_doc(template: str, source: str | None = None):
+	from pdffiller.api.forms import SOURCE_PRINT_DESIGN, _normalize_source
+
+	if _normalize_source(source) == SOURCE_PRINT_DESIGN:
+		if not template:
+			frappe.throw(_("PDF Print Design is required"))
+		design_doc = frappe.get_doc("PDF Print Design", template)
+		if not frappe.has_permission("PDF Print Design", "write", design_doc.name):
+			frappe.throw(_("Not permitted to edit this PDF print design"), frappe.PermissionError)
+		return design_doc
+
+	template_doc = _get_template(template)
+	_require_template_write(template_doc)
+	return template_doc
+
+
 def _fields_for_template(template_doc, fields=None) -> list[dict]:
 	parsed = _parse_fields(fields) if fields is not None else None
 	if parsed is not None:
 		return parsed
-	if not template_doc.pdf_file:
+	if not getattr(template_doc, "pdf_file", None):
 		return []
 	pdf_path = get_pdf_path(template_doc.pdf_file)
 	return merge_fields_with_mappings(list_field_layout(pdf_path), template_doc)
@@ -182,9 +198,8 @@ def get_ai_status() -> dict:
 
 
 @frappe.whitelist()
-def suggest_mappings(template: str, fields=None, mode: str = "unmapped") -> dict:
-	template_doc = _get_template(template)
-	_require_template_write(template_doc)
+def suggest_mappings(template: str, fields=None, mode: str = "unmapped", source: str | None = None) -> dict:
+	template_doc = _load_design_doc(template, source)
 
 	if not template_doc.reference_doctype:
 		frappe.throw(_("Set a Reference DocType before using AI mapping suggestions"))
@@ -224,9 +239,8 @@ def suggest_mappings(template: str, fields=None, mode: str = "unmapped") -> dict
 
 
 @frappe.whitelist()
-def assist_chat(template: str, message: str, fields=None, history=None) -> dict:
-	template_doc = _get_template(template)
-	_require_template_write(template_doc)
+def assist_chat(template: str, message: str, fields=None, history=None, source: str | None = None) -> dict:
+	template_doc = _load_design_doc(template, source)
 
 	message = (message or "").strip()
 	if not message:

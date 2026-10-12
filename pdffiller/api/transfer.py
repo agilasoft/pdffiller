@@ -18,7 +18,7 @@ from frappe.utils import now_datetime
 
 from pdffiller.utils.pdf_filler import get_pdf_path
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
 TEMPLATE_FIELDS = (
 	"title",
@@ -29,7 +29,25 @@ TEMPLATE_FIELDS = (
 	"display_depends_on",
 	"fields_only",
 	"always_print_last",
+	"flatten",
+	"skip_draft_watermark",
 	"page_roles",
+)
+
+PRINT_DESIGN_FIELDS = (
+	"title",
+	"reference_doctype",
+	"group",
+	"disabled",
+	"show_on_draft",
+	"display_depends_on",
+	"paper_size",
+	"page_width",
+	"page_height",
+	"always_print_last",
+	"skip_draft_watermark",
+	"page_roles",
+	"layout_json",
 )
 
 MAPPING_FIELDS = (
@@ -47,8 +65,8 @@ MAPPING_FIELDS = (
 )
 
 
-def _ensure_permission(action: str = "write") -> None:
-	if not frappe.has_permission("PDF Form Template", action):
+def _ensure_permission(action: str = "write", doctype: str = "PDF Form Template") -> None:
+	if not frappe.has_permission(doctype, action):
 		frappe.throw(_("Not permitted"), frappe.PermissionError)
 
 
@@ -77,9 +95,26 @@ def _serialize_mapping(row) -> dict[str, Any]:
 	return {field: data.get(field) for field in MAPPING_FIELDS}
 
 
+def _serialize_roles(doc) -> list[str]:
+	roles = []
+	for row in getattr(doc, "allowed_roles", None) or []:
+		role = row.get("role") if isinstance(row, dict) else getattr(row, "role", None)
+		if role:
+			roles.append(role)
+	return roles
+
+
 def _serialize_template(doc) -> dict[str, Any]:
 	payload = {field: doc.get(field) for field in TEMPLATE_FIELDS}
 	payload["field_mappings"] = [_serialize_mapping(row) for row in doc.field_mappings or []]
+	payload["allowed_roles"] = _serialize_roles(doc)
+	return payload
+
+
+def _serialize_print_design(doc) -> dict[str, Any]:
+	payload = {field: doc.get(field) for field in PRINT_DESIGN_FIELDS}
+	payload["field_mappings"] = [_serialize_mapping(row) for row in doc.field_mappings or []]
+	payload["allowed_roles"] = _serialize_roles(doc)
 	return payload
 
 
@@ -141,6 +176,42 @@ def build_export_pack(template_names: list[str] | None = None) -> tuple[bytes, s
 	return content, download_name
 
 
+def build_print_design_pack(design_names: list[str] | None = None) -> tuple[bytes, str]:
+	filters = {}
+	if design_names is not None:
+		filters["name"] = ("in", design_names)
+
+	names = frappe.get_all(
+		"PDF Print Design",
+		filters=filters,
+		pluck="name",
+		order_by="title asc",
+	)
+	if design_names is not None:
+		missing = sorted(set(design_names) - set(names))
+		if missing:
+			frappe.throw(_("Print design(s) not found: {0}").format(", ".join(missing)))
+	if not names:
+		frappe.throw(_("No PDF Print Designs to export"))
+
+	manifest = {
+		"format_version": FORMAT_VERSION,
+		"exported_at": str(now_datetime()),
+		"templates": [],
+		"print_designs": [],
+	}
+	for name in names:
+		doc = frappe.get_doc("PDF Print Design", name)
+		manifest["print_designs"].append(_serialize_print_design(doc))
+
+	content = json.dumps(manifest, indent=2, ensure_ascii=False).encode("utf-8")
+	if len(names) == 1:
+		download_name = _safe_download_name(names[0])
+	else:
+		download_name = f"pdffiller-print-designs-{now_datetime().strftime('%Y%m%d')}"
+	return content, download_name
+
+
 # Backwards-compatible alias used by older tests / callers.
 build_export_zip = build_export_pack
 
@@ -151,6 +222,15 @@ def export_templates(templates=None):
 	_ensure_permission("read")
 	names = _parse_template_names(templates)
 	content, filename = build_export_pack(names)
+	provide_binary_file(filename, "txt", content)
+
+
+@frappe.whitelist()
+def export_print_designs(designs=None):
+	"""Download a TXT (JSON) pack of one or more PDF Print Designs."""
+	_ensure_permission("read", "PDF Print Design")
+	names = _parse_template_names(designs)
+	content, filename = build_print_design_pack(names)
 	provide_binary_file(filename, "txt", content)
 
 
@@ -194,9 +274,20 @@ def _mapping_field_warnings(reference_doctype: str, mappings: list[dict]) -> lis
 	return warnings
 
 
+def _apply_allowed_roles(doc, payload: dict) -> None:
+	if "allowed_roles" not in payload:
+		return
+	doc.allowed_roles = []
+	for role in payload.get("allowed_roles") or []:
+		if isinstance(role, dict):
+			role = role.get("role")
+		if role:
+			doc.append("allowed_roles", {"role": role})
+
+
 def _apply_template_payload(doc, payload: dict, pdf_url: str) -> None:
 	for field in TEMPLATE_FIELDS:
-		if field == "title":
+		if field == "title" or field not in payload:
 			continue
 		doc.set(field, payload.get(field))
 	doc.pdf_file = pdf_url
@@ -206,6 +297,7 @@ def _apply_template_payload(doc, payload: dict, pdf_url: str) -> None:
 			"field_mappings",
 			{field: row.get(field) for field in MAPPING_FIELDS},
 		)
+	_apply_allowed_roles(doc, payload)
 
 
 def _import_one_template(payload: dict, pdf_bytes: bytes) -> dict[str, Any]:
@@ -256,6 +348,61 @@ def _import_one_template(payload: dict, pdf_bytes: bytes) -> dict[str, Any]:
 	}
 
 
+def _apply_print_design_payload(doc, payload: dict) -> None:
+	for field in PRINT_DESIGN_FIELDS:
+		if field == "title" or field not in payload:
+			continue
+		doc.set(field, payload.get(field))
+	doc.field_mappings = []
+	for row in payload.get("field_mappings") or []:
+		doc.append(
+			"field_mappings",
+			{field: row.get(field) for field in MAPPING_FIELDS},
+		)
+	_apply_allowed_roles(doc, payload)
+
+
+def _import_one_print_design(payload: dict) -> dict[str, Any]:
+	title = (payload.get("title") or "").strip()
+	if not title:
+		return {"status": "error", "title": title or None, "message": _("Missing title")}
+
+	reference_doctype = (payload.get("reference_doctype") or "").strip()
+	if not reference_doctype:
+		return {
+			"status": "error",
+			"title": title,
+			"message": _("Missing reference_doctype"),
+		}
+	if not frappe.db.exists("DocType", reference_doctype):
+		return {
+			"status": "error",
+			"title": title,
+			"message": _("Reference DocType '{0}' does not exist").format(reference_doctype),
+		}
+
+	warnings = _mapping_field_warnings(reference_doctype, payload.get("field_mappings") or [])
+	exists = frappe.db.exists("PDF Print Design", title)
+	if exists:
+		doc = frappe.get_doc("PDF Print Design", title)
+		_apply_print_design_payload(doc, payload)
+		doc.save(ignore_permissions=True)
+		status = "updated"
+	else:
+		doc = frappe.get_doc({"doctype": "PDF Print Design", "title": title})
+		_apply_print_design_payload(doc, payload)
+		doc.insert(ignore_permissions=True)
+		status = "created"
+
+	return {
+		"status": status,
+		"title": title,
+		"name": doc.name,
+		"kind": "print_design",
+		"warnings": warnings,
+	}
+
+
 def _decode_uploaded_content(file_content) -> bytes:
 	if isinstance(file_content, (bytes, bytearray)):
 		return bytes(file_content)
@@ -296,7 +443,18 @@ def _load_pack_bytes(file_url: str | None = None, file_content=None) -> bytes:
 
 
 def _process_manifest(manifest: dict) -> dict[str, Any]:
-	if not isinstance(manifest, dict) or not isinstance(manifest.get("templates"), list):
+	if not isinstance(manifest, dict):
+		frappe.throw(_("Invalid pack structure"))
+
+	templates = manifest.get("templates")
+	print_designs = manifest.get("print_designs")
+	if templates is None and print_designs is None:
+		frappe.throw(_("Invalid pack structure"))
+	if templates is None:
+		templates = []
+	if print_designs is None:
+		print_designs = []
+	if not isinstance(templates, list) or not isinstance(print_designs, list):
 		frappe.throw(_("Invalid pack structure"))
 
 	version = manifest.get("format_version")
@@ -310,7 +468,7 @@ def _process_manifest(manifest: dict) -> dict[str, Any]:
 	results: list[dict[str, Any]] = []
 	pdf_lookup = manifest.get("_pdf_bytes_by_filename") or {}
 
-	for payload in manifest["templates"]:
+	for payload in templates:
 		if not isinstance(payload, dict):
 			results.append({"status": "error", "title": None, "message": _("Invalid template entry")})
 			continue
@@ -357,6 +515,25 @@ def _process_manifest(manifest: dict) -> dict[str, Any]:
 			results.append(_import_one_template(clean_payload, pdf_bytes))
 		except Exception as exc:
 			frappe.log_error(title="PDF Form Template import failed")
+			results.append(
+				{
+					"status": "error",
+					"title": payload.get("title"),
+					"message": str(exc),
+				}
+			)
+
+	for payload in print_designs:
+		if not isinstance(payload, dict):
+			results.append({"status": "error", "title": None, "message": _("Invalid print design entry")})
+			continue
+		try:
+			results.append(_import_one_print_design(payload))
+		except Exception as exc:
+			try:
+				frappe.log_error(title="PDF Print Design import failed")
+			except Exception:
+				pass
 			results.append(
 				{
 					"status": "error",
@@ -432,7 +609,13 @@ def import_templates_from_pack(pack_bytes: bytes) -> dict[str, Any]:
 
 @frappe.whitelist()
 def import_templates(file_url=None, file_content=None):
-	"""Import PDF Form Templates from an exported JSON (or legacy ZIP) pack."""
-	_ensure_permission("write")
+	"""Import PDF Form Templates and PDF Print Designs from an exported JSON (or legacy ZIP) pack."""
 	pack_bytes = _load_pack_bytes(file_url=file_url, file_content=file_content)
+	text = pack_bytes.lstrip()
+	has_designs = b'"print_designs"' in text
+	has_templates = b'"templates"' in text
+	if has_templates or not has_designs:
+		_ensure_permission("write", "PDF Form Template")
+	if has_designs:
+		_ensure_permission("write", "PDF Print Design")
 	return import_templates_from_pack(pack_bytes)

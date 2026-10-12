@@ -11,6 +11,14 @@ pdffiller.transfer.export_templates = function (names) {
 	open_url_post("/api/method/pdffiller.api.transfer.export_templates", args);
 };
 
+pdffiller.transfer.export_print_designs = function (names) {
+	const args = {};
+	if (names && names.length) {
+		args.designs = JSON.stringify(names);
+	}
+	open_url_post("/api/method/pdffiller.api.transfer.export_print_designs", args);
+};
+
 pdffiller.transfer.show_import_summary = function (summary) {
 	summary = summary || {};
 	const lines = [
@@ -74,7 +82,7 @@ pdffiller.transfer._is_supported_pack = function (filename) {
 
 pdffiller.transfer.import_templates = function (on_done) {
 	const dialog = new frappe.ui.Dialog({
-		title: __("Import PDF Form Templates"),
+		title: __("Import PDF Forms"),
 		fields: [
 			{
 				fieldtype: "HTML",

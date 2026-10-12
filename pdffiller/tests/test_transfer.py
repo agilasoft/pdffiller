@@ -158,3 +158,28 @@ class TestImportOneTemplate(unittest.TestCase):
 		)
 		self.assertEqual(result["status"], "error")
 		self.assertIn("does not exist", result["message"])
+
+
+class TestImportPrintDesign(unittest.TestCase):
+	@patch("pdffiller.api.transfer._import_one_print_design")
+	def test_import_print_design_pack(self, mock_import):
+		mock_import.return_value = {"status": "created", "title": "Layout", "warnings": []}
+		pack = json.dumps(
+			{
+				"format_version": FORMAT_VERSION,
+				"templates": [],
+				"print_designs": [
+					{
+						"title": "Layout",
+						"reference_doctype": "Sales Invoice",
+						"paper_size": "A4",
+						"layout_json": "{}",
+						"field_mappings": [],
+					}
+				],
+			}
+		).encode("utf-8")
+		summary = import_templates_from_json(pack)
+		self.assertEqual(summary["created"], 1)
+		self.assertEqual(summary["errors"], 0)
+		self.assertEqual(mock_import.call_args.args[0]["title"], "Layout")

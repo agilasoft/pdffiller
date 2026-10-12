@@ -48,18 +48,30 @@ def get_source_type(mapping_row) -> str:
 	return "Field Path"
 
 
-def render_jinja_template(template: str, source_doc, extra: dict[str, Any] | None = None) -> str:
+def render_jinja_template(
+	template: str,
+	source_doc,
+	extra: dict[str, Any] | None = None,
+	field_name: str = "",
+) -> str:
 	template = (template or "").strip()
 	if not template:
 		return ""
 
 	try:
 		return cstr(frappe.render_template(template, get_jinja_context(source_doc, extra))).strip()
-	except Exception:
-		frappe.log_error(
-			title="PDF Form Template Jinja Error",
-			message=frappe.get_traceback(),
-		)
+	except Exception as exc:
+		try:
+			frappe.log_error(
+				title="PDF Form Template Jinja Error",
+				message=frappe.get_traceback(),
+			)
+		except Exception:
+			pass
+		from pdffiller.utils.fill_warnings import add_warning
+
+		detail = cstr(exc).splitlines()[0][:240] if cstr(exc) else "Jinja template failed"
+		add_warning(field_name, detail)
 		return ""
 
 
@@ -72,6 +84,7 @@ def resolve_mapping_value(source_doc, mapping_row, extra: dict[str, Any] | None 
 	extra = extra or {}
 	child_row = extra.get("row")
 
+	field_name = cstr(mapping_get(mapping_row, "pdf_field_name") or "")
 	source_field = (mapping_get(mapping_row, "source_field") or "").strip()
 	repeat_field = (mapping_get(mapping_row, "repeat_field") or "").strip()
 	system_name = source_field if source_field in SYSTEM_SOURCE_FIELDS else ""
@@ -86,9 +99,9 @@ def resolve_mapping_value(source_doc, mapping_row, extra: dict[str, Any] | None 
 		return cstr(extra.get(system_name) or "")
 
 	if source_type == "Jinja Script":
-		value = render_jinja_template(mapping_row.jinja_script, source_doc, extra)
+		value = render_jinja_template(mapping_row.jinja_script, source_doc, extra, field_name=field_name)
 	elif source_type == "Jinja Template":
-		value = render_jinja_template(mapping_row.source_field, source_doc, extra)
+		value = render_jinja_template(mapping_row.source_field, source_doc, extra, field_name=field_name)
 	elif mapping_get(mapping_row, "repeat_table"):
 		target = child_row
 		fieldname = repeat_field or source_field

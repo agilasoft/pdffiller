@@ -27,7 +27,8 @@ from pdffiller.utils.pdf_filler import (
 	_draw_special_field,
 	_draw_text_field,
 	_get_barcode_fields,
-	_get_image_fields,
+	_get_image_like_fields,
+	_get_qr_fields,
 	_get_readonly_fields,
 	_is_truthy_checkbox_value,
 	_set_radio_field,
@@ -74,7 +75,8 @@ def fill_looping_template(
 			frappe.throw(_(str(exc) or "Line items do not fit this template. Add a Loop page."))
 
 		barcode_fields = _get_barcode_fields(template_doc)
-		image_fields = _get_image_fields(template_doc)
+		image_fields = _get_image_like_fields(template_doc)
+		qr_fields = _get_qr_fields(template_doc)
 		readonly_fields = _get_readonly_fields(template_doc)
 		layout_by_page = _layout_by_page(layout)
 
@@ -93,6 +95,7 @@ def fill_looping_template(
 						overrides,
 						barcode_fields,
 						image_fields,
+						qr_fields=qr_fields,
 					)
 				else:
 					_append_widget_page(
@@ -107,6 +110,7 @@ def fill_looping_template(
 						barcode_fields,
 						image_fields,
 						readonly_fields,
+						qr_fields=qr_fields,
 					)
 			return output.tobytes()
 		finally:
@@ -174,6 +178,7 @@ def _append_widget_page(
 	barcode_fields,
 	image_fields,
 	readonly_fields,
+	qr_fields=None,
 ):
 	import fitz
 
@@ -199,6 +204,7 @@ def _append_widget_page(
 			readonly_fields,
 			barcode_fields,
 			image_fields,
+			qr_fields=qr_fields,
 		)
 		_suffix_widget_names(page, page_spec.page_n)
 		output.insert_pdf(one)
@@ -217,6 +223,7 @@ def _append_fields_only_page(
 	overrides: dict[str, str],
 	barcode_fields,
 	image_fields,
+	qr_fields=None,
 ):
 	import fitz
 
@@ -251,7 +258,9 @@ def _append_fields_only_page(
 		widget = widgets.get(name)
 		if not widget:
 			continue
-		if _draw_special_field(page, widget.rect, value, name, barcode_fields, image_fields):
+		if _draw_special_field(
+			page, widget.rect, value, name, barcode_fields, image_fields, qr_fields=qr_fields
+		):
 			continue
 		if widget.field_type_string in ("CheckBox", "Checkbox"):
 			_draw_checkbox(page, widget.rect, _is_truthy_checkbox_value(value))
@@ -265,8 +274,10 @@ def _append_fields_only_page(
 			)
 
 
-def _fill_page_widgets(page, form_data, readonly_fields, barcode_fields, image_fields):
+def _fill_page_widgets(page, form_data, readonly_fields, barcode_fields, image_fields, qr_fields=None):
 	import fitz
+
+	qr_fields = qr_fields or set()
 
 	page_widgets = list(page.widgets() or [])
 	widgets = {widget.field_name: widget for widget in page_widgets}
@@ -297,9 +308,11 @@ def _fill_page_widgets(page, form_data, readonly_fields, barcode_fields, image_f
 		widget = widgets.get(field_name)
 		if not widget:
 			continue
-		if field_name in barcode_fields or field_name in image_fields:
+		if field_name in barcode_fields or field_name in image_fields or field_name in qr_fields:
 			_set_widget_value(widget, "")
-			_draw_special_field(page, widget.rect, value, field_name, barcode_fields, image_fields)
+			_draw_special_field(
+				page, widget.rect, value, field_name, barcode_fields, image_fields, qr_fields=qr_fields
+			)
 		else:
 			_set_widget_value(widget, value)
 		if field_name in readonly_fields:

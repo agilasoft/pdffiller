@@ -17,8 +17,10 @@ class TestFormsApi(unittest.TestCase):
 	def test_get_templates_empty(self):
 		self.assertEqual(get_templates(""), [])
 
+	@patch("pdffiller.api.forms._safe_doctype_exists", return_value=False)
+	@patch("pdffiller.api.forms._doctype_available", return_value=True)
 	@patch("pdffiller.api.forms.frappe.get_all")
-	def test_get_templates_lists_both_kinds(self, mock_get_all):
+	def test_get_templates_lists_both_kinds(self, mock_get_all, _available, _packet_exists):
 		def fake_get_all(doctype, **kwargs):
 			if doctype == "PDF Form Template":
 				return [
@@ -30,15 +32,17 @@ class TestFormsApi(unittest.TestCase):
 						"display_depends_on": "",
 					}
 				]
-			return [
-				{
-					"name": "Blank Quote",
-					"title": "Blank Quote",
-					"show_on_draft": 1,
-					"group": "Quotes",
-					"display_depends_on": "",
-				}
-			]
+			if doctype == "PDF Print Design":
+				return [
+					{
+						"name": "Blank Quote",
+						"title": "Blank Quote",
+						"show_on_draft": 1,
+						"group": "Quotes",
+						"display_depends_on": "",
+					}
+				]
+			return []
 
 		mock_get_all.side_effect = fake_get_all
 		result = get_templates("Sales Quotation")
@@ -215,6 +219,119 @@ class TestValidateEditableOverrides(unittest.TestCase):
 		self.assertTrue(result["data_uri"].startswith("data:application/pdf;base64,"))
 		mock_blank.assert_called_once_with(design_doc, source_doc, overrides={})
 		mock_overlay.assert_not_called()
+
+
+class TestFormPermissions(unittest.TestCase):
+	@patch("pdffiller.api.forms.frappe.has_permission", return_value=False)
+	def test_list_pdf_fields_requires_template_read(self, _perm):
+		from pdffiller.api.forms import list_pdf_fields
+
+		with self.assertRaises(Exception):
+			list_pdf_fields("Test Form")
+
+	@patch("pdffiller.api.forms.frappe.get_doc")
+	@patch("pdffiller.api.forms.frappe.has_permission", return_value=False)
+	def test_preview_requires_document_read(self, _perm, mock_get_doc):
+		from pdffiller.api.forms import get_form_preview
+
+		mock_get_doc.return_value = SimpleNamespace(
+			name="Test Form",
+			title="Test Form",
+			reference_doctype="Payment Entry",
+			disabled=0,
+			fields_only=0,
+		)
+		with self.assertRaises(Exception):
+			get_form_preview("Test Form", "Payment Entry", "PE-001")
+
+	@patch("pdffiller.utils.form_access.frappe.get_roles", return_value=["Guest"])
+	@patch("pdffiller.api.forms.frappe.get_doc")
+	@patch("pdffiller.api.forms.frappe.has_permission", return_value=True)
+	@patch("pdffiller.api.forms.should_display_template", return_value=True)
+	def test_preview_rejects_user_without_allowed_role(self, _visible, _perm, mock_get_doc, _roles):
+		from pdffiller.api.forms import get_form_preview
+
+		template_doc = SimpleNamespace(
+			name="Payroll Form",
+			title="Payroll Form",
+			reference_doctype="Payment Entry",
+			disabled=0,
+			fields_only=0,
+			allowed_roles=[SimpleNamespace(role="HR User")],
+		)
+		mock_get_doc.return_value = template_doc
+		with self.assertRaises(Exception):
+			get_form_preview("Payroll Form", "Payment Entry", "PE-001")
+
+	@patch("pdffiller.api.forms.frappe.get_roles", return_value=["Accounts User"])
+	@patch("pdffiller.api.forms._safe_doctype_exists", return_value=True)
+	@patch("pdffiller.api.forms._doctype_available", return_value=True)
+	@patch("pdffiller.api.forms.frappe.get_all")
+	def test_get_templates_hides_forms_for_other_roles(self, mock_get_all, _available, _exists, _roles):
+		def fake_get_all(doctype, **kwargs):
+			if doctype == "PDF Form Template":
+				return [
+					{
+						"name": "Secret",
+						"title": "Secret",
+						"show_on_draft": 1,
+						"group": "",
+						"display_depends_on": "",
+					},
+					{
+						"name": "Public",
+						"title": "Public",
+						"show_on_draft": 1,
+						"group": "",
+						"display_depends_on": "",
+					},
+				]
+			if doctype == "PDF Form Allowed Role":
+				parent = (kwargs.get("filters") or {}).get("parenttype")
+				if parent == "PDF Form Template":
+					return [{"parent": "Secret", "role": "HR User"}]
+			return []
+
+		mock_get_all.side_effect = fake_get_all
+		result = get_templates("Payment Entry")
+		self.assertEqual([row["name"] for row in result], ["Public"])
+
+	def test_preview_returns_mapping_warnings(self):
+		from pdffiller.utils.fill_warnings import add_warning
+
+		def fake_preview(_template, _source):
+			add_warning("Payee", "Could not render barcode")
+			return []
+
+		with (
+			patch("pdffiller.api.forms.build_field_preview", side_effect=fake_preview),
+			patch("pdffiller.api.forms.frappe.get_doc") as mock_get_doc,
+			patch("pdffiller.api.forms.frappe.has_permission", return_value=True),
+			patch("pdffiller.api.forms.should_display_template", return_value=True),
+		):
+			from pdffiller.api.forms import get_form_preview
+
+			template_doc = SimpleNamespace(
+				name="Test Form",
+				title="Test Form",
+				reference_doctype="Payment Entry",
+				disabled=0,
+				fields_only=0,
+			)
+			mock_get_doc.side_effect = [template_doc, SimpleNamespace()]
+			result = get_form_preview("Test Form", "Payment Entry", "PE-001")
+		self.assertEqual(result["warnings"][0]["field"], "Payee")
+
+	@patch("pdffiller.api.forms.frappe.has_permission")
+	def test_attach_requires_document_write(self, mock_perm):
+		from pdffiller.api.forms import attach_filled_pdf
+
+		def allow(doctype, action, name=None):
+			return action != "write"
+
+		mock_perm.side_effect = allow
+		with self.assertRaises(Exception):
+			attach_filled_pdf("Test Form", "Payment Entry", "PE-001")
 
 
 if __name__ == "__main__":
