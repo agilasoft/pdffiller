@@ -87,6 +87,281 @@ def _set_radio_field(page, field_name: str, export_value: str) -> bool:
 	return False
 
 
+FONT_FAMILIES = ("Helvetica", "Times", "Courier")
+TEXT_ALIGNS = ("left", "center", "right")
+_FONT_VARIANTS = {
+	("Helvetica", 0, 0): ("Helv", "helv"),
+	("Helvetica", 1, 0): ("HeBo", "hebo"),
+	("Helvetica", 0, 1): ("HeIt", "heit"),
+	("Helvetica", 1, 1): ("HeBI", "hebi"),
+	("Times", 0, 0): ("TiRo", "tiro"),
+	("Times", 1, 0): ("TiBo", "tibo"),
+	("Times", 0, 1): ("TiIt", "tiit"),
+	("Times", 1, 1): ("TiBI", "tibi"),
+	("Courier", 0, 0): ("Cour", "cour"),
+	("Courier", 1, 0): ("CoBo", "cobo"),
+	("Courier", 0, 1): ("CoIt", "coit"),
+	("Courier", 1, 1): ("CoBI", "cobi"),
+}
+_WIDGET_FONT_LOOKUP = {
+	widget_name.lower(): (family, bold, italic, draw_name)
+	for (family, bold, italic), (widget_name, draw_name) in _FONT_VARIANTS.items()
+}
+
+
+def default_word_wrap(field_type: str | None) -> int:
+	return 1 if (field_type or "") in ("Small Text", "Long Text", "text") else 0
+
+
+def normalize_color(value) -> str:
+	text = str(value or "").strip()
+	if len(text) == 7 and text.startswith("#"):
+		try:
+			int(text[1:], 16)
+		except ValueError:
+			return "#000000"
+		return text.lower()
+	return "#000000"
+
+
+def color_to_rgb(value) -> tuple[float, float, float]:
+	hex_color = normalize_color(value)
+	return (
+		int(hex_color[1:3], 16) / 255.0,
+		int(hex_color[3:5], 16) / 255.0,
+		int(hex_color[5:7], 16) / 255.0,
+	)
+
+
+def rgb_to_hex(color) -> str:
+	if color is None:
+		return "#000000"
+	try:
+		values = [float(channel) for channel in list(color)]
+	except (TypeError, ValueError):
+		return "#000000"
+	if len(values) == 1:
+		values = [values[0], values[0], values[0]]
+	if len(values) < 3:
+		return "#000000"
+	parts = []
+	for channel in values[:3]:
+		if channel > 1:
+			channel = channel / 255.0
+		parts.append(max(0, min(255, round(channel * 255))))
+	return "#{:02x}{:02x}{:02x}".format(*parts)
+
+
+def normalize_text_style(source: dict | None, *, field_type: str | None = None) -> dict:
+	source = source or {}
+	family = str(source.get("font_family") or "Helvetica").strip()
+	if family not in FONT_FAMILIES:
+		family = "Helvetica"
+	align = str(source.get("align") or "left").strip().lower()
+	if align not in TEXT_ALIGNS:
+		align = "left"
+	raw_wrap = source.get("word_wrap") if "word_wrap" in source else None
+	if raw_wrap is None or raw_wrap == "":
+		word_wrap = default_word_wrap(field_type if field_type is not None else source.get("field_type"))
+	else:
+		word_wrap = 1 if int(raw_wrap) else 0
+	return {
+		"font_family": family,
+		"bold": 1 if int(source.get("bold") or 0) else 0,
+		"italic": 1 if int(source.get("italic") or 0) else 0,
+		"color": normalize_color(source.get("color")),
+		"align": align,
+		"word_wrap": word_wrap,
+	}
+
+
+def widget_font_name(style: dict) -> str:
+	key = (style["font_family"], int(style["bold"]), int(style["italic"]))
+	return _FONT_VARIANTS.get(key, _FONT_VARIANTS[("Helvetica", 0, 0)])[0]
+
+
+def draw_font_name(style: dict) -> str:
+	key = (style["font_family"], int(style["bold"]), int(style["italic"]))
+	return _FONT_VARIANTS.get(key, _FONT_VARIANTS[("Helvetica", 0, 0)])[1]
+
+
+def style_from_widget_font(name: str | None) -> tuple[str, int, int]:
+	found = _WIDGET_FONT_LOOKUP.get(str(name or "Helv").strip().lower())
+	if not found:
+		return ("Helvetica", 0, 0)
+	return found[0], found[1], found[2]
+
+
+def read_widget_align(doc, widget) -> str | None:
+	"""Return left/center/right, or None when the widget has no /Q entry."""
+	xref = int(getattr(widget, "xref", 0) or 0)
+	if doc is None or not xref:
+		return None
+	try:
+		kind, value = doc.xref_get_key(xref, "Q")
+	except Exception:
+		return None
+	if not value or kind in ("null", "none") or str(value) in ("null", "none"):
+		return None
+	try:
+		quad = int(str(value).split()[0])
+	except (TypeError, ValueError):
+		return None
+	return {0: "left", 1: "center", 2: "right"}.get(quad)
+
+
+def write_widget_align(doc, widget, align: str) -> None:
+	xref = int(getattr(widget, "xref", 0) or 0)
+	if doc is None or not xref:
+		return
+	quad = {"left": "0", "center": "1", "right": "2"}.get(align or "left", "0")
+	doc.xref_set_key(xref, "Q", quad)
+
+
+_BASE14_FONTS = {
+	"Helv": "Helvetica",
+	"HeBo": "Helvetica-Bold",
+	"HeIt": "Helvetica-Oblique",
+	"HeBI": "Helvetica-BoldOblique",
+	"TiRo": "Times-Roman",
+	"TiBo": "Times-Bold",
+	"TiIt": "Times-Italic",
+	"TiBI": "Times-BoldItalic",
+	"Cour": "Courier",
+	"CoBo": "Courier-Bold",
+	"CoIt": "Courier-Oblique",
+	"CoBI": "Courier-BoldOblique",
+}
+
+
+def ensure_form_font(doc, resource_name: str) -> None:
+	"""Register a base-14 font on the AcroForm so widget /DA names resolve.
+
+	PyMuPDF's widget API only accepts Helv, TiRo, and Cour. Bold and italic
+	variants are written into /DA after the widget exists.
+	"""
+	resource_name = resource_name or "Helv"
+	if resource_name in (doc.FormFonts or []):
+		return
+	base_font = _BASE14_FONTS.get(resource_name, "Helvetica")
+	font_xref = doc.get_new_xref()
+	doc.update_object(
+		font_xref,
+		f"<< /Type /Font /Subtype /Type1 /BaseFont /{base_font} /Encoding /WinAnsiEncoding /Name /{resource_name} >>",
+	)
+	doc.xref_set_key(doc.pdf_catalog(), f"AcroForm/DR/Font/{resource_name}", f"{font_xref} 0 R")
+
+
+def write_widget_text_appearance(doc, widget, field: dict) -> None:
+	style = normalize_text_style(field, field_type=field.get("field_type"))
+	font_name = widget_font_name(style)
+	ensure_form_font(doc, font_name)
+	red, green, blue = color_to_rgb(style["color"])
+	size = float(field.get("font_size") or 10)
+	doc.xref_set_key(
+		widget.xref,
+		"DA",
+		f"({red:g} {green:g} {blue:g} rg /{font_name} {size:g} Tf)",
+	)
+	write_widget_align(doc, widget, style["align"])
+
+
+def apply_widget_text_style(widget, field: dict) -> dict:
+	import fitz
+
+	style = normalize_text_style(field, field_type=field.get("field_type"))
+	widget.text_font = widget_font_name(style)
+	widget.text_fontsize = float(field.get("font_size") or 10)
+	widget.text_color = list(color_to_rgb(style["color"]))
+	flags = int(getattr(widget, "field_flags", 0) or 0)
+	if style["word_wrap"]:
+		flags |= fitz.PDF_TX_FIELD_IS_MULTILINE
+		flags &= ~fitz.PDF_TX_FIELD_IS_COMB
+	else:
+		flags &= ~fitz.PDF_TX_FIELD_IS_MULTILINE
+	widget.field_flags = flags
+	return style
+
+
+def text_draw_options_from_widget(widget, doc=None) -> dict:
+	import fitz
+
+	family, bold, italic = style_from_widget_font(getattr(widget, "text_font", None))
+	flags = int(getattr(widget, "field_flags", 0) or 0)
+	return {
+		"fontname": draw_font_name({"font_family": family, "bold": bold, "italic": italic}),
+		"color": color_to_rgb(rgb_to_hex(getattr(widget, "text_color", None))),
+		"align": read_widget_align(doc, widget),
+		"word_wrap": bool(flags & fitz.PDF_TX_FIELD_IS_MULTILINE),
+	}
+
+
+def _resolved_align_name(align: str | None, text: str) -> str:
+	if not align:
+		return "center" if len(text.strip()) <= 8 else "left"
+	name = str(align).lower()
+	if name in TEXT_ALIGNS:
+		return name
+	return "left"
+
+
+def _fitz_align(fitz_mod, align_name: str):
+	return {
+		"center": fitz_mod.TEXT_ALIGN_CENTER,
+		"right": fitz_mod.TEXT_ALIGN_RIGHT,
+	}.get(align_name, fitz_mod.TEXT_ALIGN_LEFT)
+
+
+def _text_width(text: str, fontname: str, fontsize: float) -> float:
+	import fitz
+
+	return float(fitz.get_text_length(text, fontname=fontname, fontsize=fontsize))
+
+
+def _clip_single_line(text: str, fontname: str, fontsize: float, width: float, align_name: str) -> str:
+	"""Keep the part of a single line that fits in width."""
+	text = " ".join(text.replace("\n", " ").split())
+	if not text or width <= 0:
+		return text
+	if _text_width(text, fontname, fontsize) <= width:
+		return text
+
+	def fits(sample: str) -> bool:
+		return _text_width(sample, fontname, fontsize) <= width
+
+	if align_name == "right":
+		start = 0
+		end = len(text)
+		while start < end:
+			mid = (start + end) // 2
+			if fits(text[mid:]):
+				end = mid
+			else:
+				start = mid + 1
+		return text[start:]
+
+	if align_name == "center":
+		start = 0
+		end = len(text)
+		while start < end:
+			mid = (start + end) // 2
+			if fits(text[mid : len(text) - mid]):
+				end = mid
+			else:
+				start = mid + 1
+		return text[start : len(text) - start]
+
+	end = len(text)
+	start = 0
+	while start < end:
+		mid = (start + end + 1) // 2
+		if fits(text[:mid]):
+			start = mid
+		else:
+			end = mid - 1
+	return text[:start]
+
+
 def _draw_radio_selection(page, widgets, field_name: str, export_value: str) -> None:
 	"""Stamp an X on the selected radio option (fields-only / flattened output)."""
 	import fitz
@@ -115,6 +390,10 @@ def _draw_text_field(
 	fontsize: float,
 	*,
 	comb_slots: int = 0,
+	fontname: str = "helv",
+	color: tuple[float, float, float] = (0, 0, 0),
+	align: str | None = None,
+	word_wrap: bool = True,
 ) -> None:
 	import fitz
 
@@ -123,6 +402,7 @@ def _draw_text_field(
 		return
 
 	fontsize = max(fontsize, 6)
+	fontname = fontname or "helv"
 	if comb_slots and comb_slots > 0:
 		slot_w = rect.width / comb_slots
 		chars = list(text[:comb_slots])
@@ -133,21 +413,32 @@ def _draw_text_field(
 			page.insert_textbox(
 				slot,
 				char,
-				fontname="helv",
+				fontname=fontname,
 				fontsize=min(fontsize, max(slot.height - 2, 6)),
-				color=(0, 0, 0),
+				color=color,
 				align=fitz.TEXT_ALIGN_CENTER,
 			)
 		return
 
-	align = fitz.TEXT_ALIGN_CENTER if len(text.strip()) <= 8 else fitz.TEXT_ALIGN_LEFT
+	align_name = _resolved_align_name(align, text)
+	resolved = _fitz_align(fitz, align_name)
+	target = rect
+	draw_text = text
+	if not word_wrap:
+		draw_text = _clip_single_line(text, fontname, fontsize, float(rect.width), align_name)
+		if not draw_text:
+			return
+		# One line tall enough for base-14 metrics, and short enough that a second line cannot fit.
+		line_height = min(float(rect.height), max(fontsize * 2.05, 8))
+		top = rect.y0 + max((float(rect.height) - line_height) / 2, 0)
+		target = fitz.Rect(rect.x0, top, rect.x1, min(rect.y1, top + line_height))
 	page.insert_textbox(
-		rect,
-		text,
-		fontname="helv",
+		target,
+		draw_text,
+		fontname=fontname,
 		fontsize=fontsize,
-		color=(0, 0, 0),
-		align=align,
+		color=color,
+		align=resolved,
 	)
 
 
@@ -358,6 +649,7 @@ def fill_pdf_fields_only(
 						value,
 						fontsize,
 						comb_slots=_widget_comb_slots(widget),
+						**text_draw_options_from_widget(widget, template_doc),
 					)
 
 		# Skip garbage=4: it takes seconds on BIR face PDFs and barely shrinks them.
