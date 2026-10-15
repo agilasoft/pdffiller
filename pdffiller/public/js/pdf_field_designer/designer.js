@@ -27,6 +27,9 @@ frappe.provide("pdffiller.designer");
 
 	const PAGE_ROLES = ["Once", "First", "Loop", "Last"];
 	const ROW_GAP_PT = 4;
+	const TEXT_FONTS = ["Helvetica", "Times", "Courier"];
+	const TEXT_ALIGNS = ["left", "center", "right"];
+	const NO_TEXT_STYLE = ["Check", "Select", "Barcode", "QR Code", "Image", "Signature"];
 
 	const MAX_UNDO = 80;
 	const UNDO_COALESCE_MS = 500;
@@ -166,10 +169,140 @@ frappe.provide("pdffiller.designer");
 		};
 	}
 
+	function defaultWordWrap(typeOrKind) {
+		return typeOrKind === "Small Text" || typeOrKind === "Long Text" || typeOrKind === "text" ? 1 : 0;
+	}
+
+	function normalizeStyleFields(source, typeOrKind) {
+		const family = TEXT_FONTS.includes(source.font_family) ? source.font_family : "Helvetica";
+		const align = TEXT_ALIGNS.includes(source.align) ? source.align : "left";
+		const color = /^#[0-9a-fA-F]{6}$/.test(source.color || "") ? source.color : "#000000";
+		const hasWrap = source.word_wrap !== undefined && source.word_wrap !== null && source.word_wrap !== "";
+		return {
+			font_family: family,
+			bold: source.bold ? 1 : 0,
+			italic: source.italic ? 1 : 0,
+			color,
+			align,
+			word_wrap: hasWrap ? (source.word_wrap ? 1 : 0) : defaultWordWrap(typeOrKind),
+		};
+	}
+
+	function previewFontFamily(family) {
+		if (family === "Times") return "Times, 'Times New Roman', serif";
+		if (family === "Courier") return "'Courier New', Courier, monospace";
+		return "Helvetica, Arial, sans-serif";
+	}
+
+	function textPreviewCss(item) {
+		const wrap = item.word_wrap ? "normal" : "nowrap";
+		return [
+			`font-family:${previewFontFamily(item.font_family)}`,
+			`font-weight:${item.bold ? 700 : 400}`,
+			`font-style:${item.italic ? "italic" : "normal"}`,
+			`color:${item.color || "#000000"}`,
+			`text-align:${item.align || "left"}`,
+			`font-size:${ptToPx(item.font_size || 10)}px`,
+			`white-space:${wrap}`,
+			"overflow:hidden",
+			item.word_wrap ? "text-overflow:clip" : "text-overflow:ellipsis",
+			"display:block",
+		].join(";");
+	}
+
+	function renderTextStyleControls(item) {
+		const familyOptions = TEXT_FONTS.map(
+			(name) =>
+				`<option value="${name}" ${item.font_family === name ? "selected" : ""}>${__(name)}</option>`
+		).join("");
+		const alignOptions = [
+			["left", __("Left")],
+			["center", __("Center")],
+			["right", __("Right")],
+		]
+			.map(
+				([value, label]) =>
+					`<option value="${value}" ${(item.align || "left") === value ? "selected" : ""}>${label}</option>`
+			)
+			.join("");
+		return `
+			<div class="pfd-form-group">
+				<label>${__("Font")}</label>
+				<select class="pfd-prop-font-family">${familyOptions}</select>
+			</div>
+			<div class="pfd-form-row">
+				<div class="pfd-form-group pfd-checkbox-group">
+					<label>
+						<input type="checkbox" class="pfd-prop-bold" ${item.bold ? "checked" : ""} />
+						${__("Bold")}
+					</label>
+				</div>
+				<div class="pfd-form-group pfd-checkbox-group">
+					<label>
+						<input type="checkbox" class="pfd-prop-italic" ${item.italic ? "checked" : ""} />
+						${__("Italic")}
+					</label>
+				</div>
+			</div>
+			<div class="pfd-form-group">
+				<label>${__("Font Size")}</label>
+				<input type="number" class="pfd-prop-font" min="6" max="72" value="${item.font_size || 10}" />
+			</div>
+			<div class="pfd-form-group">
+				<label>${__("Color")}</label>
+				<div class="pfd-color-row">
+					<input type="color" class="pfd-prop-text-color" value="${frappe.utils.escape_html(item.color || "#000000")}" />
+					<input type="text" class="pfd-prop-text-color-hex" value="${frappe.utils.escape_html(item.color || "#000000")}" />
+				</div>
+			</div>
+			<div class="pfd-form-group">
+				<label>${__("Alignment")}</label>
+				<select class="pfd-prop-align">${alignOptions}</select>
+			</div>
+			<div class="pfd-form-group pfd-checkbox-group">
+				<label>
+					<input type="checkbox" class="pfd-prop-word-wrap" ${item.word_wrap ? "checked" : ""} />
+					${__("Word wrap")}
+				</label>
+			</div>
+		`;
+	}
+
+	function bindTextStyleEvents(panel, update) {
+		panel.querySelector(".pfd-prop-font-family")?.addEventListener("change", (e) => {
+			update({ font_family: e.target.value }, { refreshCanvas: true });
+		});
+		panel.querySelector(".pfd-prop-bold")?.addEventListener("change", (e) => {
+			update({ bold: e.target.checked ? 1 : 0 }, { refreshCanvas: true });
+		});
+		panel.querySelector(".pfd-prop-italic")?.addEventListener("change", (e) => {
+			update({ italic: e.target.checked ? 1 : 0 }, { refreshCanvas: true });
+		});
+		panel.querySelector(".pfd-prop-font")?.addEventListener("input", (e) => {
+			update({ font_size: parseFloat(e.target.value) || 10 }, { refreshCanvas: true });
+		});
+		panel.querySelector(".pfd-prop-text-color")?.addEventListener("input", (e) => {
+			const hex = panel.querySelector(".pfd-prop-text-color-hex");
+			if (hex) hex.value = e.target.value;
+			update({ color: e.target.value }, { refreshCanvas: true });
+		});
+		panel.querySelector(".pfd-prop-text-color-hex")?.addEventListener("change", (e) => {
+			let value = (e.target.value || "").trim();
+			if (value && !value.startsWith("#")) value = `#${value}`;
+			update({ color: value }, { refreshCanvas: true, refreshProperties: true });
+		});
+		panel.querySelector(".pfd-prop-align")?.addEventListener("change", (e) => {
+			update({ align: e.target.value }, { refreshCanvas: true });
+		});
+		panel.querySelector(".pfd-prop-word-wrap")?.addEventListener("change", (e) => {
+			update({ word_wrap: e.target.checked ? 1 : 0 }, { refreshCanvas: true });
+		});
+	}
+
 	function normalizeLoadedField(field) {
 		const aliases = { Text: "Data", Checkbox: "Check" };
 		const field_type = aliases[field.field_type] || field.field_type || "Data";
-		return {
+		const normalized = {
 			source_type: field.source_type || "Field Path",
 			source_field: field.source_field || "",
 			jinja_script: field.jinja_script || "",
@@ -184,6 +317,7 @@ frappe.provide("pdffiller.designer");
 			field_type,
 			id: field.id || nextFieldId(),
 		};
+		return { ...normalized, ...normalizeStyleFields(normalized, field_type) };
 	}
 
 	function markDirty() {
@@ -389,6 +523,12 @@ frappe.provide("pdffiller.designer");
 			width: round(field.width),
 			height: round(field.height),
 			font_size: field.font_size || 10,
+			font_family: field.font_family || "Helvetica",
+			bold: field.bold ? 1 : 0,
+			italic: field.italic ? 1 : 0,
+			color: field.color || "#000000",
+			align: field.align || "left",
+			word_wrap: field.word_wrap ? 1 : 0,
 			source_type: field.source_type || "Field Path",
 			source_field: field.source_field || "",
 			jinja_script: field.jinja_script || "",
@@ -490,6 +630,7 @@ frappe.provide("pdffiller.designer");
 			width,
 			height,
 			font_size: spec.font_size,
+			...normalizeStyleFields({}, type),
 			...defaultMappingForType(type, spec),
 			...mappingOverrides,
 		};
@@ -934,6 +1075,9 @@ frappe.provide("pdffiller.designer");
 					? renderImagePreview(field)
 					: "";
 
+		const labelStyle = NO_TEXT_STYLE.includes(field.field_type)
+			? ""
+			: ` style="${textPreviewCss(field)}"`;
 		return `
 			<div
 				class="pfd-field-overlay${selected}${specialClass}${repeatClass}"
@@ -941,7 +1085,7 @@ frappe.provide("pdffiller.designer");
 				style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;"
 			>
 				${previewHtml}
-				<span class="pfd-field-label">${label}</span>
+				<span class="pfd-field-label"${labelStyle}>${label}</span>
 				<span class="pfd-field-meta">${typeLabel} · ${mapLabel}</span>
 				<div class="pfd-resize-handle" data-resize="1"></div>
 			</div>
@@ -1035,14 +1179,7 @@ frappe.provide("pdffiller.designer");
 						)}
 					</select>
 				</div>
-				${
-					showFont
-						? `<div class="pfd-form-group">
-							<label>${__("Font Size")}</label>
-							<input type="number" class="pfd-prop-font" min="6" max="72" value="${field.font_size || 10}" />
-						</div>`
-						: ""
-				}
+				${showFont ? renderTextStyleControls(field) : ""}
 				<div class="pfd-form-row">
 					<div class="pfd-form-group">
 						<label>${__("Width (pt)")}</label>
@@ -1453,9 +1590,7 @@ frappe.provide("pdffiller.designer");
 			updateSelectedField(updates, { refreshCanvas: true, refreshProperties: true });
 		});
 
-		panel.querySelector(".pfd-prop-font")?.addEventListener("input", (e) => {
-			updateSelectedField({ font_size: parseFloat(e.target.value) || 10 });
-		});
+		bindTextStyleEvents(panel, updateSelectedField);
 
 		panel.querySelector(".pfd-prop-width")?.addEventListener("change", (e) => {
 			updateSelectedField(

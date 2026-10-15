@@ -34,6 +34,7 @@ from pdffiller.utils.pdf_filler import (
 	_set_radio_field,
 	_set_widget_value,
 	_widget_comb_slots,
+	text_draw_options_from_widget,
 )
 
 
@@ -271,6 +272,7 @@ def _append_fields_only_page(
 				value,
 				float(getattr(widget, "text_fontsize", 0) or 10),
 				comb_slots=_widget_comb_slots(widget),
+				**text_draw_options_from_widget(widget, template_pdf),
 			)
 
 

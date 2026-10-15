@@ -12,6 +12,7 @@ from frappe import _
 
 from pdffiller.utils.page_planner import PAGE_ROLES
 from pdffiller.utils.pdf_designer import DATE_FORMATS, FRAPPE_FIELD_TYPES, SOURCE_TYPES, _normalize_field_type
+from pdffiller.utils.pdf_filler import normalize_text_style
 
 PAPER_SIZES = {
 	"A4": (595.0, 842.0),
@@ -125,7 +126,7 @@ def field_elements_as_layout(layout: dict) -> list[dict]:
 					"repeat_table": (element.get("repeat_table") or "").strip(),
 					"repeat_field": (element.get("repeat_field") or "").strip(),
 					"repeat_slot": int(element.get("repeat_slot") or 0),
-					"color": element.get("color") or "#000000",
+					**normalize_text_style(element, field_type=_normalize_field_type(element.get("field_type"))),
 				}
 			)
 	return fields
@@ -209,6 +210,12 @@ def _normalize_element(element: Any) -> dict | None:
 		"align": (element.get("align") or "left").strip() or "left",
 		"image_url": (element.get("image_url") or "").strip(),
 	}
+	style_type = None
+	if kind == FIELD_KIND:
+		style_type = _normalize_field_type(element.get("field_type"))
+	elif kind == "text":
+		style_type = "text"
+	normalized.update(normalize_text_style(element, field_type=style_type))
 	if kind == FIELD_KIND:
 		normalized.update(
 			{

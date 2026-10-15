@@ -76,6 +76,9 @@ class TestPdfDesigner(unittest.TestCase):
 		by_name = {field["field_name"]: field for field in layout}
 		self.assertAlmostEqual(by_name["customer_name"]["x"], 72, places=1)
 		self.assertEqual(by_name["customer_name"]["field_type"], "Data")
+		self.assertEqual(by_name["customer_name"]["font_family"], "Helvetica")
+		self.assertEqual(by_name["customer_name"]["align"], "left")
+		self.assertEqual(by_name["customer_name"]["word_wrap"], 0)
 		self.assertEqual(by_name["agree_terms"]["field_type"], "Check")
 
 	def test_apply_field_layout_select_and_multiline(self):
@@ -108,6 +111,75 @@ class TestPdfDesigner(unittest.TestCase):
 		doc.close()
 		self.assertEqual(_widget_type_label_from_widget(widgets["status"]), "Select")
 		self.assertEqual(_widget_type_label_from_widget(widgets["remarks"]), "Small Text")
+		self.assertTrue(widgets["remarks"].field_flags & fitz.PDF_TX_FIELD_IS_MULTILINE)
+
+	def test_apply_field_layout_text_style_roundtrip(self):
+		fields = [
+			{
+				"field_name": "title",
+				"field_type": "Data",
+				"page": 0,
+				"x": 40,
+				"y": 80,
+				"width": 300,
+				"height": 28,
+				"font_size": 14,
+				"font_family": "Times",
+				"bold": 1,
+				"italic": 1,
+				"color": "#ff0000",
+				"align": "center",
+				"word_wrap": 0,
+			},
+			{
+				"field_name": "notes",
+				"field_type": "Small Text",
+				"page": 0,
+				"x": 40,
+				"y": 120,
+				"width": 180,
+				"height": 60,
+				"font_size": 11,
+				"font_family": "Courier",
+				"bold": 0,
+				"italic": 1,
+				"color": "#0000ff",
+				"align": "right",
+				"word_wrap": 1,
+			},
+		]
+		pdf_bytes = apply_field_layout(self.plain_path, fields)
+		doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+		try:
+			widgets = {widget.field_name: widget for widget in doc[0].widgets() or []}
+			title = widgets["title"]
+			notes = widgets["notes"]
+			self.assertEqual(title.text_font, "TiBI")
+			self.assertEqual(notes.text_font, "CoIt")
+			self.assertAlmostEqual(title.text_color[0], 1, places=2)
+			self.assertAlmostEqual(notes.text_color[2], 1, places=2)
+			self.assertFalse(title.field_flags & fitz.PDF_TX_FIELD_IS_MULTILINE)
+			self.assertTrue(notes.field_flags & fitz.PDF_TX_FIELD_IS_MULTILINE)
+			self.assertEqual(doc.xref_get_key(title.xref, "Q")[1], "1")
+			self.assertEqual(doc.xref_get_key(notes.xref, "Q")[1], "2")
+		finally:
+			doc.close()
+
+		output_path = os.path.join(self.tempdir, "styled.pdf")
+		with open(output_path, "wb") as handle:
+			handle.write(pdf_bytes)
+		layout = {field["field_name"]: field for field in list_field_layout(output_path)}
+		self.assertEqual(layout["title"]["font_family"], "Times")
+		self.assertEqual(layout["title"]["bold"], 1)
+		self.assertEqual(layout["title"]["italic"], 1)
+		self.assertEqual(layout["title"]["color"], "#ff0000")
+		self.assertEqual(layout["title"]["align"], "center")
+		self.assertEqual(layout["title"]["word_wrap"], 0)
+		self.assertEqual(layout["notes"]["font_family"], "Courier")
+		self.assertEqual(layout["notes"]["italic"], 1)
+		self.assertEqual(layout["notes"]["color"], "#0000ff")
+		self.assertEqual(layout["notes"]["align"], "right")
+		self.assertEqual(layout["notes"]["word_wrap"], 1)
 
 	def test_apply_field_layout_barcode_widget(self):
 		fields = [

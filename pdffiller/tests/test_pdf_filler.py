@@ -20,6 +20,15 @@ from pdffiller.utils.pdf_filler import (
 from pdffiller.utils.pdf_designer import apply_field_layout
 
 
+def _span_containing(page, text: str):
+	for block in page.get_text("dict").get("blocks", []):
+		for line in block.get("lines", []):
+			for span in line.get("spans", []):
+				if text in (span.get("text") or ""):
+					return span
+	return None
+
+
 def _make_fillable_pdf(path: str, fields: dict[str, str]) -> None:
 	doc = fitz.open()
 	page = doc.new_page(width=595, height=842)
@@ -92,6 +101,59 @@ class TestPdfFiller(unittest.TestCase):
 		finally:
 			output.close()
 			os.unlink(background_path)
+
+	def test_fill_pdf_fields_only_uses_text_style(self):
+		doc = fitz.open()
+		doc.new_page(width=595, height=842)
+		plain = os.path.join(self.tempdir, "plain.pdf")
+		doc.save(plain)
+		doc.close()
+		pdf_bytes = apply_field_layout(
+			plain,
+			[
+				{
+					"field_name": "heading",
+					"field_type": "Data",
+					"page": 0,
+					"x": 40,
+					"y": 80,
+					"width": 400,
+					"height": 28,
+					"font_size": 16,
+					"font_family": "Helvetica",
+					"bold": 1,
+					"italic": 0,
+					"color": "#cc0000",
+					"align": "center",
+					"word_wrap": 0,
+				}
+			],
+		)
+		styled = os.path.join(self.tempdir, "styled.pdf")
+		with open(styled, "wb") as handle:
+			handle.write(pdf_bytes)
+
+		filled = fill_pdf_fields_only(styled, {"heading": "Hi"})
+		output = fitz.open(stream=filled, filetype="pdf")
+		try:
+			span = _span_containing(output[0], "Hi")
+			self.assertIsNotNone(span)
+			self.assertIn("Bold", span["font"])
+			self.assertGreater(span["color"] >> 16, 150)
+			self.assertGreater(span["bbox"][0], 80)
+		finally:
+			output.close()
+
+		legacy = os.path.join(self.tempdir, "legacy.pdf")
+		_make_fillable_pdf(legacy, {"Short": ""})
+		legacy_filled = fill_pdf_fields_only(legacy, {"Short": "Hello"})
+		legacy_doc = fitz.open(stream=legacy_filled, filetype="pdf")
+		try:
+			legacy_span = _span_containing(legacy_doc[0], "Hello")
+			self.assertIsNotNone(legacy_span)
+			self.assertGreater(legacy_span["bbox"][0], 100)
+		finally:
+			legacy_doc.close()
 
 	def test_build_form_data_with_overrides(self):
 		template_doc = SimpleNamespace(

@@ -10,7 +10,15 @@ import re
 import frappe
 from frappe import _
 
-from pdffiller.utils.pdf_filler import get_pdf_path
+from pdffiller.utils.pdf_filler import (
+	apply_widget_text_style,
+	get_pdf_path,
+	normalize_text_style,
+	read_widget_align,
+	rgb_to_hex,
+	style_from_widget_font,
+	write_widget_text_appearance,
+)
 
 FRAPPE_FIELD_TYPES = frozenset(
 	{
@@ -45,6 +53,12 @@ DEFAULT_MAPPING = {
 	"options": "",
 	"text_maxlen": 0,
 	"comb": 0,
+	"font_family": "Helvetica",
+	"bold": 0,
+	"italic": 0,
+	"color": "#000000",
+	"align": "left",
+	"word_wrap": 0,
 	"repeat_table": "",
 	"repeat_field": "",
 	"repeat_slot": 0,
@@ -126,6 +140,8 @@ def list_field_layout(pdf_path: str) -> list[dict]:
 				rect = widget.rect
 				field_type = _widget_type_label(widget)
 				flags = int(getattr(widget, "field_flags", 0) or 0)
+				family, bold, italic = style_from_widget_font(getattr(widget, "text_font", None))
+				stored_align = read_widget_align(doc, widget)
 				fields.append(
 					{
 						**DEFAULT_MAPPING,
@@ -137,6 +153,12 @@ def list_field_layout(pdf_path: str) -> list[dict]:
 						"width": round(rect.width, 2),
 						"height": round(rect.height, 2),
 						"font_size": float(getattr(widget, "text_fontsize", 0) or 10),
+						"font_family": family,
+						"bold": bold,
+						"italic": italic,
+						"color": rgb_to_hex(getattr(widget, "text_color", None)),
+						"align": stored_align or "left",
+						"word_wrap": 1 if flags & fitz.PDF_TX_FIELD_IS_MULTILINE else 0,
 						"options": _widget_options(widget) if field_type == "Select" else "",
 						"text_maxlen": int(getattr(widget, "text_maxlen", 0) or 0),
 						"comb": 1 if flags & fitz.PDF_TX_FIELD_IS_COMB else 0,
@@ -245,6 +267,13 @@ def _validate_field_layout(fields: list[dict]) -> list[dict]:
 		if comb and not text_maxlen:
 			frappe.throw(_("Comb fields require text_maxlen for field {0}").format(field_name))
 
+		try:
+			text_style = normalize_text_style(field, field_type=field_type)
+		except (TypeError, ValueError):
+			frappe.throw(_("Invalid text style in field {0}").format(field_name))
+		if text_style["word_wrap"] and comb:
+			comb = 0
+
 		validated.append(
 			{
 				"field_name": field_name,
@@ -255,6 +284,12 @@ def _validate_field_layout(fields: list[dict]) -> list[dict]:
 				"width": width,
 				"height": height,
 				"font_size": font_size,
+				"font_family": text_style["font_family"],
+				"bold": text_style["bold"],
+				"italic": text_style["italic"],
+				"color": text_style["color"],
+				"align": text_style["align"],
+				"word_wrap": text_style["word_wrap"],
 				"source_type": source_type,
 				"source_field": field.get("source_field") or "",
 				"jinja_script": field.get("jinja_script") or "",
@@ -285,6 +320,7 @@ def _apply_widget(field: dict, page) -> None:
 	widget.rect = fitz.Rect(x0, y0, x1, y1)
 
 	field_type = field["field_type"]
+	styled = False
 	if field_type == "Check":
 		widget.field_type = fitz.PDF_WIDGET_TYPE_CHECKBOX
 		widget.field_value = False
@@ -292,22 +328,26 @@ def _apply_widget(field: dict, page) -> None:
 		widget.field_type = fitz.PDF_WIDGET_TYPE_COMBOBOX
 		widget.choice_values = _parse_options(field.get("options") or "")
 		widget.field_value = widget.choice_values[0]
-	elif field_type in ("Small Text", "Long Text"):
-		widget.field_type = fitz.PDF_WIDGET_TYPE_TEXT
-		widget.text_fontsize = field["font_size"]
-		widget.field_flags = fitz.PDF_TX_FIELD_IS_MULTILINE
-		widget.field_value = ""
 	else:
 		widget.field_type = fitz.PDF_WIDGET_TYPE_TEXT
-		widget.text_fontsize = field["font_size"]
 		widget.field_value = ""
-		text_maxlen = int(field.get("text_maxlen") or 0)
-		if text_maxlen > 0:
-			widget.text_maxlen = text_maxlen
-		if int(field.get("comb") or 0) and text_maxlen > 0:
-			widget.field_flags = int(widget.field_flags or 0) | fitz.PDF_TX_FIELD_IS_COMB
+		style = apply_widget_text_style(widget, field)
+		styled = True
+		if not style["word_wrap"]:
+			text_maxlen = int(field.get("text_maxlen") or 0)
+			if text_maxlen > 0:
+				widget.text_maxlen = text_maxlen
+			if int(field.get("comb") or 0) and text_maxlen > 0:
+				widget.field_flags = int(widget.field_flags or 0) | fitz.PDF_TX_FIELD_IS_COMB
 
 	page.add_widget(widget)
+	if styled:
+		stored = next(
+			(item for item in page.widgets() or [] if item.field_name == field["field_name"]),
+			None,
+		)
+		if stored is not None:
+			write_widget_text_appearance(page.parent, stored, field)
 
 
 def apply_field_layout(pdf_path: str, fields: list[dict]) -> bytes:

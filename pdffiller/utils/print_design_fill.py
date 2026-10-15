@@ -26,6 +26,9 @@ from pdffiller.utils.pdf_filler import (
 	_get_image_like_fields,
 	_get_qr_fields,
 	_is_truthy_checkbox_value,
+	color_to_rgb,
+	draw_font_name,
+	normalize_text_style,
 )
 from pdffiller.utils.print_layout import (
 	FIELD_KIND,
@@ -128,18 +131,16 @@ def _draw_static_elements(page, elements: list[dict]) -> None:
 			if not text.strip():
 				continue
 			rect = fitz.Rect(x, y, x + max(width, 4), y + max(height, 4))
-			align_name = (element.get("align") or "left").lower()
-			align = {
-				"center": fitz.TEXT_ALIGN_CENTER,
-				"right": fitz.TEXT_ALIGN_RIGHT,
-			}.get(align_name, fitz.TEXT_ALIGN_LEFT)
-			page.insert_textbox(
+			style = normalize_text_style(element, field_type="text")
+			_draw_text_field(
+				page,
 				rect,
 				text,
-				fontname="helv",
-				fontsize=_fitted_fontsize(rect, float(element.get("font_size") or 10)),
-				color=parse_color(element.get("color")),
-				align=align,
+				_fitted_fontsize(rect, float(element.get("font_size") or 10)),
+				fontname=draw_font_name(style),
+				color=color_to_rgb(style["color"]),
+				align=style["align"],
+				word_wrap=bool(style["word_wrap"]),
 			)
 			continue
 
@@ -220,9 +221,14 @@ def _draw_bound_fields(
 			_draw_checkbox(page, rect, _is_truthy_checkbox_value(value))
 			continue
 		if (value or "").strip():
+			style = normalize_text_style(field, field_type=field_type)
 			_draw_text_field(
 				page,
 				rect,
 				value,
 				_fitted_fontsize(rect, float(field.get("font_size") or 10)),
+				fontname=draw_font_name(style),
+				color=color_to_rgb(style["color"]),
+				align=style["align"],
+				word_wrap=bool(style["word_wrap"]),
 			)

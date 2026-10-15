@@ -10,6 +10,15 @@ import fitz
 from pdffiller.utils.print_design_fill import fill_print_design
 
 
+def _span_containing(page, text: str):
+	for block in page.get_text("dict").get("blocks", []):
+		for line in block.get("lines", []):
+			for span in line.get("spans", []):
+				if text in (span.get("text") or ""):
+					return span
+	return None
+
+
 def _mapping(name, **kwargs):
 	data = dict(
 		pdf_field_name=name,
@@ -101,6 +110,76 @@ class TestPrintDesignFill(unittest.TestCase):
 			self.assertIn("Customer", text)
 			self.assertIn("Acme Corp", text)
 			self.assertEqual(list(doc[0].widgets() or []), [])
+		finally:
+			doc.close()
+
+	def test_static_and_bound_text_use_style(self):
+		layout = {
+			"page_width": 595,
+			"page_height": 842,
+			"pages": [
+				{
+					"role": "Once",
+					"elements": [
+						{
+							"id": "label",
+							"kind": "text",
+							"x": 40,
+							"y": 40,
+							"width": 400,
+							"height": 24,
+							"text": "Heading",
+							"font_size": 16,
+							"font_family": "Times",
+							"bold": 1,
+							"color": "#0000cc",
+							"align": "right",
+							"word_wrap": 0,
+						},
+						{
+							"id": "field",
+							"kind": "field",
+							"field_name": "customer",
+							"field_type": "Data",
+							"x": 40,
+							"y": 80,
+							"width": 400,
+							"height": 24,
+							"font_size": 14,
+							"font_family": "Helvetica",
+							"italic": 1,
+							"color": "#cc0000",
+							"align": "center",
+							"word_wrap": 0,
+							"source_field": "customer_name",
+						},
+					],
+				}
+			],
+		}
+		design = SimpleNamespace(
+			layout_json=json.dumps(layout),
+			page_width=595,
+			page_height=842,
+			page_roles={"0": "Once"},
+			always_print_last=0,
+			field_mappings=[_mapping("customer", source_field="customer_name")],
+		)
+		source = SimpleNamespace(customer_name="Acme")
+		pdf_bytes = fill_print_design(design, source)
+		doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+		try:
+			heading = _span_containing(doc[0], "Heading")
+			value = _span_containing(doc[0], "Acme")
+			self.assertIsNotNone(heading)
+			self.assertIsNotNone(value)
+			self.assertIn("Times", heading["font"])
+			self.assertIn("Bold", heading["font"])
+			self.assertGreater(heading["color"] & 0xFF, 150)
+			self.assertGreater(heading["bbox"][0], 150)
+			self.assertIn("Oblique", value["font"])
+			self.assertGreater(value["color"] >> 16, 150)
+			self.assertGreater(value["bbox"][0], 80)
 		finally:
 			doc.close()
 
