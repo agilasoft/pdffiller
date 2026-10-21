@@ -129,7 +129,13 @@ frappe.provide("pdffiller.print_designer");
 	}
 
 	function multiSelect() {
-		return window.pdffiller && pdffiller.multi_select;
+		const api = window.pdffiller && pdffiller.multi_select;
+		return api && typeof api.preparePaste === "function" ? api : null;
+	}
+
+	function clipboardReady() {
+		const api = multiSelect();
+		return Boolean(api && typeof api.hasClipboard === "function" && api.hasClipboard());
 	}
 
 	function groupMembers(id) {
@@ -236,7 +242,7 @@ frappe.provide("pdffiller.print_designer");
 	function renderSelectionActions() {
 		const ids = currentSelection();
 		const grouped = selectedObjects().some((el) => multiSelect()?.cleanGroupId(el.group_id));
-		const canPaste = Boolean(multiSelect()?.hasClipboard());
+		const canPaste = clipboardReady();
 		if (!ids.length && !canPaste) return "";
 		const groupBtn =
 			ids.length >= 2
@@ -406,7 +412,7 @@ frappe.provide("pdffiller.print_designer");
 				action: "paste",
 				label: __("Paste"),
 				shortcut: "Ctrl+V",
-				disabled: !api.hasClipboard(),
+				disabled: !clipboardReady(),
 				onSelect: pasteClipboard,
 			},
 		]);

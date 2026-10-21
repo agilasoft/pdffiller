@@ -730,8 +730,17 @@ frappe.provide("pdffiller.workdesk");
 		return false;
 	}
 
+	function isDesignDocument(frm) {
+		return frm && (frm.doctype === "PDF Form Template" || frm.doctype === "PDF Print Design");
+	}
+
 	pdffiller.workdesk.refresh = function (frm) {
 		if (shouldSkip(frm)) return;
+		if (isDesignDocument(frm)) {
+			unmount(frm);
+			frm.page.wrapper.find(".wd-layout-toggle").remove();
+			return;
+		}
 		const button = frm.page.add_inner_button(__("Layout"), () => toggle(frm));
 		if (button) button.addClass("wd-layout-toggle").toggleClass("is-active", state.open);
 		state.frm = frm;
