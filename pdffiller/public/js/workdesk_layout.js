@@ -10,8 +10,9 @@ frappe.provide("pdffiller.workdesk");
 	const TABLE_FIELDS = new Set(["Table", "Table MultiSelect"]);
 
 	const state = {
-		open: localStorage.getItem(STORAGE_KEY) === "1",
+		open: localStorage.getItem(STORAGE_KEY) !== "0",
 		tab: "layout",
+		refKind: "child",
 		query: "",
 		expanded: {},
 		selectedId: null,
@@ -454,36 +455,42 @@ frappe.provide("pdffiller.workdesk");
 	}
 
 	function renderReference(frm, query) {
+		const kind = state.refKind || "child";
+		const viewSelect = `<select class="wd-ref-view" aria-label="${esc(__("Reference view"))}">
+			<option value="child" ${kind === "child" ? "selected" : ""}>${esc(__("Child Tables"))}</option>
+			<option value="document" ${kind === "document" ? "selected" : ""}>${esc(__("Document Fields"))}</option>
+		</select>`;
+		if (kind === "document") {
+			const docs = documentFields(frm).filter((df) => {
+				if (!query) return true;
+				return `${df.label || ""} ${df.fieldname}`.toLowerCase().includes(query);
+			});
+			const cards = docs.map((df) => refCard(df)).join("");
+			return `${viewSelect}<div class="wd-ref-list">${
+				cards || `<div class="wd-empty">${esc(__("No matching fields."))}</div>`
+			}</div>`;
+		}
 		const tables = childTableNodes(frm);
-		const docs = documentFields(frm).filter((df) => {
-			if (!query) return true;
-			return `${df.label || ""} ${df.fieldname}`.toLowerCase().includes(query);
-		});
-		const docOpen = !!query && docs.length;
-		let html = refGroup(
-			"ref:document",
-			__("Document Fields"),
-			docs.length,
-			docs.map((df) => refCard(df)).join(""),
-			docOpen
-		);
+		let html = "";
 		tables.forEach((table) => {
 			let columns = columnFields(table.options);
 			if (query) {
 				columns = columns.filter((df) =>
 					`${df.label || ""} ${df.fieldname} ${table.label}`.toLowerCase().includes(query)
 				);
-				if (!columns.length && !matches(table, query)) return;
+				if (!columns.length && !table.label.toLowerCase().includes(query)) return;
 			}
 			html += refGroup(
 				`ref:${table.fieldname}`,
 				table.label,
 				columns.length,
 				columns.map((df) => refCard(df, table.fieldname)).join(""),
-				!!query && columns.length
+				false
 			);
 		});
-		return html;
+		return `${viewSelect}<div class="wd-ref-list">${
+			html || `<div class="wd-empty">${esc(__("No child tables on this form."))}</div>`
+		}</div>`;
 	}
 
 	function renderBody(root) {
@@ -491,6 +498,7 @@ frappe.provide("pdffiller.workdesk");
 		if (!frm || !root || !root.length) return;
 		const query = (state.query || "").trim().toLowerCase();
 		const body = root.find(".wd-body");
+		root.toggleClass("is-fields", state.tab === "fields");
 		root.find(".wd-title").text(state.tab === "fields" ? __("Reference Fields") : __("Workdesk Layout"));
 		root.find(".wd-tab").each(function () {
 			$(this).toggleClass("is-active", this.dataset.tab === state.tab);
@@ -505,9 +513,31 @@ frappe.provide("pdffiller.workdesk");
 		body.html(html || `<div class="wd-empty">${esc(__("No matching objects."))}</div>`);
 	}
 
+	function expandAncestors(id) {
+		function walk(nodes, parents) {
+			for (const node of nodes || []) {
+				if (node.id === id) {
+					parents.forEach((parent) => {
+						state.expanded[parent.id] = true;
+					});
+					return true;
+				}
+				if (walk(node.children, parents.concat(node))) return true;
+			}
+			return false;
+		}
+		walk(state.tree, []);
+	}
+
 	function selectNode(node, scroll) {
 		if (!node) return;
 		state.selectedId = node.id;
+		if (!state.tree.length && state.frm) state.tree = buildTree(state.frm);
+		expandAncestors(node.id);
+		if (node.kind === "column" && node.fieldname) {
+			state.expanded[`ref:${node.fieldname}`] = true;
+			state.refKind = "child";
+		}
 		const root = sidebarRoot();
 		if (root) renderBody(root);
 		showHighlight(node, { scroll: !!scroll });
@@ -554,6 +584,10 @@ frappe.provide("pdffiller.workdesk");
 	}
 
 	function bindSidebar(root) {
+		root.on("change", ".wd-ref-view", function () {
+			state.refKind = this.value === "document" ? "document" : "child";
+			renderBody(root);
+		});
 		root.on("click", ".wd-tab", function () {
 			state.tab = this.dataset.tab;
 			if (state.tab === "fields") {
@@ -621,6 +655,7 @@ frappe.provide("pdffiller.workdesk");
 		const main = frm.page.wrapper.find(".layout-main");
 		if (!main.length) return;
 		main.addClass("wd-layout-active");
+		main.children(".layout-side-section").addClass("wd-native-side-hidden");
 		let root = main.children(".wd-layout");
 		if (!root.length) {
 			root = $(`
@@ -639,9 +674,12 @@ frappe.provide("pdffiller.workdesk");
 						<div class="wd-title">${esc(__("Workdesk Layout"))}</div>
 						<button type="button" class="wd-close" aria-label="${esc(__("Close"))}">&times;</button>
 					</div>
-					<input type="search" class="wd-search" placeholder="${esc(__("Search objects..."))}" value="${esc(
-						state.query
-					)}" />
+					<label class="wd-search-wrap">
+						<span class="wd-search-icon">${icon("search")}</span>
+						<input type="search" class="wd-search" placeholder="${esc(__("Search objects..."))}" value="${esc(
+							state.query
+						)}" />
+					</label>
 					<div class="wd-body"></div>
 				</aside>
 			`);
@@ -664,6 +702,7 @@ frappe.provide("pdffiller.workdesk");
 		if (!page) return;
 		const main = page.find(".layout-main");
 		main.removeClass("wd-layout-active");
+		main.children(".layout-side-section").removeClass("wd-native-side-hidden");
 		main.children(".wd-layout").remove();
 	}
 
