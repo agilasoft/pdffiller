@@ -60,17 +60,10 @@ frappe.provide("pdffiller.designer");
 		scale: 1,
 		fieldCounter: 1,
 		fieldFilter: "",
-		refView: "fields",
 		collapsedSections: {
-			layout: false,
 			fieldTypes: false,
 			referenceFields: false,
-			childTables: false,
 		},
-		expandedGroups: {},
-		page_roles: {},
-		always_print_last: 0,
-		child_tables: [],
 	};
 
 	function getTemplateName() {
@@ -1284,8 +1277,8 @@ frappe.provide("pdffiller.designer");
 				collapsed ? " pfd-collapsible-section--collapsed" : ""
 			}" data-section="${sectionId}">
 				<button type="button" class="pfd-panel-toggle" aria-expanded="${!collapsed}">
-					<span class="pfd-panel-title">${title}</span>
 					${frappe.utils.icon("down", "xs", "pfd-panel-toggle-icon")}
+					<span class="pfd-panel-title">${title}</span>
 				</button>
 				<div class="pfd-collapsible-body">
 					${bodyHtml}
@@ -1819,9 +1812,15 @@ frappe.provide("pdffiller.designer");
 			</div>
 			<div class="pfd-main">
 				<div class="pfd-left">
-					${renderCollapsibleSection("layout", __("Layout"), `<div class="pfd-layout-body">${renderLayout()}</div>`)}
 					${renderCollapsibleSection("fieldTypes", __("Field Types"), renderPalette())}
-					${renderCollapsibleSection("referenceFields", __("Reference Fields"), renderReferencePanel())}
+					${renderCollapsibleSection(
+						"referenceFields",
+						__("Reference Fields"),
+						`<input type="text" class="pfd-field-filter" placeholder="${__("Search fields…")}" value="${frappe.utils.escape_html(
+							state.fieldFilter
+						)}" />
+						<div class="pfd-ref-fields">${renderReferenceFields()}</div>`
+					)}
 				</div>
 				<div class="pfd-center pfd-canvas-container">${renderCanvas()}</div>
 				<div class="pfd-right">
@@ -2111,10 +2110,6 @@ frappe.provide("pdffiller.designer");
 			});
 		});
 
-		app.querySelector(".pfd-ref-view")?.addEventListener("change", (e) => {
-			state.refView = e.target.value;
-			refreshRefBody();
-		});
 		app.querySelector(".pfd-field-filter")?.addEventListener("input", (e) => {
 			state.fieldFilter = e.target.value;
 			refreshRefBody();

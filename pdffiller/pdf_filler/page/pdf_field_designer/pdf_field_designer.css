@@ -89,7 +89,6 @@
 .pfd-panel-toggle {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
 	gap: 4px;
 	width: 100%;
 	padding: 0;
@@ -108,7 +107,6 @@
 	transition: transform 0.15s ease;
 	color: var(--text-muted, #666);
 	flex-shrink: 0;
-	margin-left: auto;
 }
 
 .pfd-collapsible-section--collapsed .pfd-panel-toggle-icon {
@@ -385,62 +383,6 @@ button.pfd-layout-item {
 	font-size: 8px;
 	line-height: 1.1;
 	opacity: 0.85;
-}
-
-.pfd-field-overlay--barcode {
-	background: rgba(255, 255, 255, 0.92);
-}
-
-.pfd-field-overlay--barcode .pfd-barcode-preview {
-	position: absolute;
-	top: 2px;
-	left: 2px;
-	right: 2px;
-	bottom: 14px;
-	width: calc(100% - 4px);
-	height: calc(100% - 16px);
-	pointer-events: none;
-}
-
-.pfd-field-overlay--barcode .pfd-field-label,
-.pfd-field-overlay--barcode .pfd-field-meta {
-	background: rgba(255, 255, 255, 0.85);
-}
-
-.pfd-field-overlay--image {
-	background: rgba(255, 255, 255, 0.92);
-}
-
-.pfd-field-overlay--image .pfd-image-preview,
-.pfd-field-overlay--image .pfd-image-placeholder {
-	position: absolute;
-	top: 2px;
-	left: 2px;
-	right: 2px;
-	bottom: 14px;
-	width: calc(100% - 4px);
-	height: calc(100% - 16px);
-	pointer-events: none;
-	object-fit: contain;
-}
-
-.pfd-field-overlay--image .pfd-image-placeholder {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	background: repeating-linear-gradient(
-		45deg,
-		rgba(0, 0, 0, 0.03),
-		rgba(0, 0, 0, 0.03) 6px,
-		rgba(0, 0, 0, 0.06) 6px,
-		rgba(0, 0, 0, 0.06) 12px
-	);
-	color: var(--text-muted, #888);
-}
-
-.pfd-field-overlay--image .pfd-field-label,
-.pfd-field-overlay--image .pfd-field-meta {
-	background: rgba(255, 255, 255, 0.85);
 }
 
 .pfd-field-filter {
