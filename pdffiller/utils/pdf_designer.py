@@ -7,6 +7,13 @@ import base64
 import os
 import re
 
+_GROUP_ID_RE = re.compile(r"^grp_[A-Za-z0-9]+$")
+
+
+def _clean_group_id(value) -> str:
+	group_id = value.strip() if isinstance(value, str) else ""
+	return group_id if _GROUP_ID_RE.fullmatch(group_id) else ""
+
 import frappe
 from frappe import _
 
@@ -164,6 +171,9 @@ def list_field_layout(pdf_path: str) -> list[dict]:
 						"comb": 1 if flags & fitz.PDF_TX_FIELD_IS_COMB else 0,
 					}
 				)
+				group_id = _clean_group_id(getattr(widget, "field_label", None))
+				if group_id:
+					fields[-1]["group_id"] = group_id
 	finally:
 		doc.close()
 	return fields
@@ -274,8 +284,8 @@ def _validate_field_layout(fields: list[dict]) -> list[dict]:
 		if text_style["word_wrap"] and comb:
 			comb = 0
 
-		validated.append(
-			{
+		group_id = _clean_group_id(field.get("group_id"))
+		row = {
 				"field_name": field_name,
 				"field_type": field_type,
 				"page": page,
@@ -303,7 +313,9 @@ def _validate_field_layout(fields: list[dict]) -> list[dict]:
 				"repeat_field": (field.get("repeat_field") or "").strip(),
 				"repeat_slot": max(0, repeat_slot),
 			}
-		)
+		if group_id:
+			row["group_id"] = group_id
+		validated.append(row)
 
 	return validated
 
@@ -340,6 +352,9 @@ def _apply_widget(field: dict, page) -> None:
 			if int(field.get("comb") or 0) and text_maxlen > 0:
 				widget.field_flags = int(widget.field_flags or 0) | fitz.PDF_TX_FIELD_IS_COMB
 
+	group_id = _clean_group_id(field.get("group_id"))
+	if group_id:
+		widget.field_label = group_id
 	page.add_widget(widget)
 	if styled:
 		stored = next(

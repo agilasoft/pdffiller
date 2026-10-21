@@ -724,3 +724,48 @@ button.pfd-layout-item {
 	border-radius: var(--border-radius-sm, 4px);
 	resize: vertical;
 }
+
+.pfd-selection-box {
+	position: absolute;
+	border: 1px solid var(--primary, #2490ef);
+	background: rgba(36, 144, 239, 0.05);
+	box-shadow: 0 0 0 1px rgba(36, 144, 239, 0.35);
+	z-index: 3;
+	cursor: move;
+	pointer-events: auto;
+}
+
+.pfd-marquee {
+	position: absolute;
+	border: 1px solid var(--primary, #2490ef);
+	background: rgba(36, 144, 239, 0.12);
+	z-index: 8;
+	pointer-events: none;
+}
+
+.pfd-field-overlay.pfd-selected,
+.ppd-element.pfd-selected {
+	z-index: 5;
+}
+
+.pfd-field-overlay.pfd-grouped,
+.ppd-element.pfd-grouped {
+	outline: 1px dashed rgba(36, 144, 239, 0.85);
+	outline-offset: 1px;
+}
+
+.pfd-layout-item--grouped .pfd-ref-meta::before {
+	content: "";
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	margin-right: 4px;
+	border: 1px solid var(--primary, #2490ef);
+	border-radius: 1px;
+	vertical-align: middle;
+}
+
+.pfd-multi-actions {
+	display: flex;
+	gap: 8px;
+}

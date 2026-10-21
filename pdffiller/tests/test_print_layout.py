@@ -152,6 +152,42 @@ class TestPrintLayout(unittest.TestCase):
 		with self.assertRaises(Exception):
 			validate_layout(layout)
 
+	def test_parse_layout_keeps_group_id(self):
+		raw = {
+			"page_width": 595,
+			"page_height": 842,
+			"pages": [
+				{
+					"role": "Once",
+					"elements": [
+						{
+							"id": "a",
+							"kind": "text",
+							"x": 72,
+							"y": 72,
+							"width": 80,
+							"height": 18,
+							"text": "A",
+							"group_id": "grp_header1",
+						},
+						{
+							"id": "b",
+							"kind": "rect",
+							"x": 72,
+							"y": 100,
+							"width": 40,
+							"height": 20,
+							"group_id": "not a group",
+						},
+					],
+				}
+			],
+		}
+		layout = parse_layout(raw)
+		elements = layout["pages"][0]["elements"]
+		self.assertEqual(elements[0]["group_id"], "grp_header1")
+		self.assertNotIn("group_id", elements[1])
+
 
 if __name__ == "__main__":
 	unittest.main()

@@ -36,6 +36,7 @@ frappe.provide("pdffiller.designer");
 
 	let pageInstance = null;
 	let dragState = null;
+	let skipOverlayClick = false;
 	let undoStack = [];
 	let redoStack = [];
 	let applyingHistory = false;
@@ -53,6 +54,8 @@ frappe.provide("pdffiller.designer");
 		date_formats: ["", "%d-%m-%Y", "%m/%d/%Y", "%Y-%m-%d", "%d/%m/%Y"],
 		currentPage: 0,
 		selectedId: null,
+		selectedIds: [],
+		selectionAnchor: null,
 		dirty: false,
 		scale: 1,
 		fieldCounter: 1,
@@ -104,6 +107,178 @@ frappe.provide("pdffiller.designer");
 
 	function getPageFields(pageNo) {
 		return state.fields.filter((field) => field.page === pageNo);
+	}
+
+	function multiSelect() {
+		return window.pdffiller && pdffiller.multi_select;
+	}
+
+	function groupMembers(id) {
+		const field = state.fields.find((item) => item.id === id);
+		if (!field) return [];
+		const groupId = multiSelect()?.cleanGroupId(field.group_id);
+		if (!groupId) return [field.id];
+		return state.fields
+			.filter((item) => item.page === field.page && multiSelect().cleanGroupId(item.group_id) === groupId)
+			.map((item) => item.id);
+	}
+
+	function currentSelection() {
+		const valid = new Set(getPageFields(state.currentPage).map((field) => field.id));
+		const ids = (state.selectedIds || []).filter((id) => valid.has(id));
+		if (state.selectedId && valid.has(state.selectedId) && !ids.includes(state.selectedId)) {
+			ids.push(state.selectedId);
+		}
+		return ids;
+	}
+
+	function commitSelection(ids, primary) {
+		const unique = multiSelect() ? multiSelect().unique(ids) : [...new Set((ids || []).filter(Boolean))];
+		state.selectedIds = unique;
+		state.selectedId = primary && unique.includes(primary) ? primary : unique[unique.length - 1] || null;
+	}
+
+	function clearSelection() {
+		commitSelection([], null);
+		state.selectionAnchor = null;
+	}
+
+	function selectWithPointer(id, event, fromLayout) {
+		const api = multiSelect();
+		if (!api || !event) {
+			commitSelection(groupMembers(id), id);
+			state.selectionAnchor = id;
+			return;
+		}
+		const ordered = fromLayout
+			? [...document.querySelectorAll(".pfd-ref-body .pfd-layout-item")].map((item) => item.dataset.objectId)
+			: getPageFields(state.currentPage).map((field) => field.id);
+		const modifier = event.ctrlKey || event.metaKey;
+		const result = api.applySelection({
+			ids: currentSelection(),
+			targetId: id,
+			toggle: modifier,
+			extend: event.shiftKey,
+			range: Boolean(fromLayout && event.shiftKey),
+			orderedIds: ordered,
+			anchorId: state.selectionAnchor,
+			keepIfSelected: !fromLayout && !event.shiftKey && !modifier,
+			groupOf: groupMembers,
+		});
+		state.selectionAnchor = result.anchorId;
+		commitSelection(result.ids, id);
+	}
+
+	function selectedObjects() {
+		const ids = new Set(currentSelection());
+		return getPageFields(state.currentPage).filter((field) => ids.has(field.id));
+	}
+
+	function applyObjectMove(starts, dx, dy) {
+		const api = multiSelect();
+		const page = getCurrentPage();
+		if (!api || !page) return { dx: 0, dy: 0 };
+		const moving = new Set(starts.map((item) => item.id));
+		const others = getPageFields(state.currentPage).filter((field) => !moving.has(field.id));
+		const fitted = api.fitDelta(starts, dx, dy, page.width_pt, page.height_pt, others);
+		starts.forEach((start) => {
+			const field = state.fields.find((item) => item.id === start.id);
+			if (!field) return;
+			field.x = start.x + fitted.dx;
+			field.y = start.y + fitted.dy;
+		});
+		return fitted;
+	}
+
+	function resizeOverlaps(proposed, original, fieldId) {
+		const api = multiSelect();
+		if (!api) return false;
+		const others = getPageFields(state.currentPage).filter((field) => field.id !== fieldId);
+		const blockers = others.filter((field) => !api.intersects(api.bounds(original), api.bounds(field)));
+		return blockers.some((field) => api.intersects(api.bounds(proposed), api.bounds(field)));
+	}
+
+	function renderSelectionBox() {
+		const api = multiSelect();
+		const objects = selectedObjects();
+		if (!api || objects.length < 2) return "";
+		const box = api.union(objects);
+		if (!box) return "";
+		return `<div class="pfd-selection-box" data-selection-box="1" style="left:${ptToPx(box.x)}px;top:${ptToPx(
+			box.y
+		)}px;width:${ptToPx(box.width)}px;height:${ptToPx(box.height)}px;"></div>`;
+	}
+
+	function renderSelectionActions() {
+		const ids = currentSelection();
+		const objects = selectedObjects();
+		const grouped = objects.some((field) => multiSelect()?.cleanGroupId(field.group_id));
+		if (ids.length < 2 && !grouped) return "";
+		const groupBtn =
+			ids.length >= 2
+				? `<button type="button" class="btn btn-default btn-sm pfd-group-btn">${__("Group")}</button>`
+				: "";
+		const ungroupBtn = grouped
+			? `<button type="button" class="btn btn-default btn-sm pfd-ungroup-btn">${__("Ungroup")}</button>`
+			: "";
+		return `<div class="pfd-prop-section pfd-multi-bar">
+			<div class="pfd-panel-title">${__("{0} selected", [String(ids.length)])}</div>
+			<div class="pfd-multi-actions">${groupBtn}${ungroupBtn}</div>
+		</div>`;
+	}
+
+	function groupSelection() {
+		const api = multiSelect();
+		const ids = currentSelection();
+		if (!api || ids.length < 2) return;
+		pushUndo("group");
+		const groupId = api.newGroupId();
+		state.fields.forEach((field) => {
+			if (ids.includes(field.id)) field.group_id = groupId;
+		});
+		markDirty();
+		render();
+	}
+
+	function ungroupSelection() {
+		const api = multiSelect();
+		const ids = new Set(currentSelection());
+		const groupIds = new Set(
+			state.fields
+				.filter((field) => ids.has(field.id) && api?.cleanGroupId(field.group_id))
+				.map((field) => api.cleanGroupId(field.group_id))
+		);
+		if (!groupIds.size) return;
+		pushUndo("ungroup");
+		state.fields.forEach((field) => {
+			if (groupIds.has(api.cleanGroupId(field.group_id))) field.group_id = "";
+		});
+		markDirty();
+		render();
+	}
+
+	function nudgeSelection(dx, dy) {
+		const objects = selectedObjects();
+		if (!objects.length || (!dx && !dy)) return;
+		const starts = objects.map((field) => ({
+			id: field.id,
+			x: field.x,
+			y: field.y,
+			width: field.width,
+			height: field.height,
+		}));
+		const fitted = applyObjectMove(starts, dx, dy);
+		if (!fitted.dx && !fitted.dy) return;
+		objects.forEach((field) => {
+			const start = starts.find((item) => item.id === field.id);
+			field.x = start.x;
+			field.y = start.y;
+		});
+		pushUndo("nudge", { coalesce: true });
+		applyObjectMove(starts, dx, dy);
+		markDirty();
+		renderCanvasContainer();
+		renderPropertiesPanel();
 	}
 
 	function getScale() {
@@ -330,6 +505,8 @@ frappe.provide("pdffiller.designer");
 		return {
 			fields: state.fields.map((field) => ({ ...field })),
 			selectedId: state.selectedId,
+			selectedIds: [...(state.selectedIds || [])],
+			selectionAnchor: state.selectionAnchor,
 			currentPage: state.currentPage,
 			page_roles: { ...(state.page_roles || {}) },
 			always_print_last: state.always_print_last,
@@ -341,6 +518,8 @@ frappe.provide("pdffiller.designer");
 	function restoreUndoableState(snapshot) {
 		state.fields = (snapshot.fields || []).map((field) => ({ ...field }));
 		state.selectedId = snapshot.selectedId;
+		state.selectedIds = [...(snapshot.selectedIds || (snapshot.selectedId ? [snapshot.selectedId] : []))];
+		state.selectionAnchor = snapshot.selectionAnchor || snapshot.selectedId || null;
 		state.currentPage = snapshot.currentPage;
 		state.page_roles = { ...(snapshot.page_roles || {}) };
 		state.always_print_last = snapshot.always_print_last;
@@ -440,7 +619,7 @@ frappe.provide("pdffiller.designer");
 				state.always_print_last = data.always_print_last ? 1 : 0;
 				state.fields = (data.fields || []).map(normalizeLoadedField);
 				state.currentPage = 0;
-				state.selectedId = null;
+				clearSelection();
 				state.dirty = false;
 				clearHistory();
 				if (pageInstance) {
@@ -544,6 +723,9 @@ frappe.provide("pdffiller.designer");
 			repeat_table: field.repeat_table || "",
 			repeat_field: field.repeat_field || "",
 			repeat_slot: Number(field.repeat_slot || 0),
+			...(multiSelect()?.cleanGroupId(field.group_id)
+				? { group_id: multiSelect().cleanGroupId(field.group_id) }
+				: {}),
 		}));
 	}
 
@@ -604,10 +786,11 @@ frappe.provide("pdffiller.designer");
 	}
 
 	function deleteSelectedField() {
-		if (!state.selectedId) return;
+		const ids = new Set(currentSelection());
+		if (!ids.size) return;
 		pushUndo("delete-field");
-		state.fields = state.fields.filter((field) => field.id !== state.selectedId);
-		state.selectedId = null;
+		state.fields = state.fields.filter((field) => !ids.has(field.id));
+		clearSelection();
 		markDirty();
 		render();
 	}
@@ -639,7 +822,7 @@ frappe.provide("pdffiller.designer");
 		};
 
 		state.fields.push(field);
-		state.selectedId = field.id;
+		commitSelection([field.id], field.id);
 		markDirty();
 		render();
 	}
@@ -807,6 +990,7 @@ frappe.provide("pdffiller.designer");
 					repeat_slot: slot,
 					repeat_table: table,
 					repeat_field: proto.repeat_field || proto.source_field || "",
+					group_id: "",
 				};
 				state.fields.push(clone);
 			});
@@ -1072,6 +1256,7 @@ frappe.provide("pdffiller.designer");
 			id: field.id,
 			label: friendlyFieldLabel(field),
 			meta: `${field.field_type || "Data"} · ${mapping}`,
+			grouped: multiSelect()?.cleanGroupId(field.group_id) ? 1 : 0,
 		};
 	}
 
@@ -1110,8 +1295,9 @@ frappe.provide("pdffiller.designer");
 	}
 
 	function renderLayoutItem(item) {
-		const selected = item.id === state.selectedId ? " pfd-layout-item--selected" : "";
-		return `<button type="button" class="pfd-ref-field pfd-layout-item${selected}" data-object-id="${frappe.utils.escape_html(
+		const selected = currentSelection().includes(item.id) ? " pfd-layout-item--selected" : "";
+		const grouped = item.grouped ? " pfd-layout-item--grouped" : "";
+		return `<button type="button" class="pfd-ref-field pfd-layout-item${selected}${grouped}" data-object-id="${frappe.utils.escape_html(
 			item.id
 		)}" title="${__("Select and highlight on the page")}">
 			<span class="pfd-ref-name">${frappe.utils.escape_html(item.label)}</span>
@@ -1191,7 +1377,8 @@ frappe.provide("pdffiller.designer");
 	}
 
 	function renderFieldOverlay(field) {
-		const selected = field.id === state.selectedId ? " pfd-selected" : "";
+		const selected = currentSelection().includes(field.id) ? " pfd-selected" : "";
+		const grouped = multiSelect()?.cleanGroupId(field.group_id) ? " pfd-grouped" : "";
 		const repeatClass = field.repeat_table ? " pfd-field-overlay--repeat" : "";
 		const left = ptToPx(field.x);
 		const top = ptToPx(field.y);
@@ -1230,7 +1417,7 @@ frappe.provide("pdffiller.designer");
 			: ` style="${textPreviewCss(field)}"`;
 		return `
 			<div
-				class="pfd-field-overlay${selected}${specialClass}${repeatClass}"
+				class="pfd-field-overlay${selected}${grouped}${specialClass}${repeatClass}"
 				data-field-id="${field.id}"
 				style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;"
 			>
@@ -1283,7 +1470,7 @@ frappe.provide("pdffiller.designer");
 				<img class="pfd-canvas-image" src="${page.image_data_uri}" alt="${__(
 					"PDF page"
 				)} ${state.currentPage + 1}" draggable="false" />
-				<div class="pfd-canvas-overlay">${fieldsHtml}</div>
+				<div class="pfd-canvas-overlay">${fieldsHtml}${renderSelectionBox()}</div>
 			</div>
 		`;
 	}
@@ -1314,6 +1501,7 @@ frappe.provide("pdffiller.designer");
 		const showJinjaScript = field.source_type === "Jinja Script";
 
 		return `
+			${renderSelectionActions()}
 			<div class="pfd-prop-section">
 				<div class="pfd-panel-title">${__("Layout")}</div>
 				<div class="pfd-form-group">
@@ -1595,7 +1783,7 @@ frappe.provide("pdffiller.designer");
 
 	function idsForHoverElement(el) {
 		if (!el) return [];
-		if (el.classList.contains("pfd-layout-item")) return [el.dataset.objectId];
+		if (el.classList.contains("pfd-layout-item")) return groupMembers(el.dataset.objectId);
 		if (el.classList.contains("pfd-child-table-toggle")) {
 			const section = el.closest(".pfd-child-table");
 			if (!section) return [];
@@ -1648,10 +1836,11 @@ frappe.provide("pdffiller.designer");
 	}
 
 	function syncLayoutSelection() {
+		const selected = new Set(currentSelection());
 		document.querySelectorAll(".pfd-layout-item").forEach((item) => {
-			const on = item.dataset.objectId === state.selectedId;
+			const on = selected.has(item.dataset.objectId);
 			item.classList.toggle("pfd-layout-item--selected", on);
-			if (!on) return;
+			if (!on || item.dataset.objectId !== state.selectedId) return;
 			const section = item.closest(".pfd-child-table");
 			if (section && !section.classList.contains("pfd-child-table--open")) {
 				section.classList.add("pfd-child-table--open");
@@ -1664,10 +1853,11 @@ frappe.provide("pdffiller.designer");
 
 	function selectObject(id) {
 		if (!id) return;
-		state.selectedId = id;
+		commitSelection(groupMembers(id), id);
+		state.selectionAnchor = id;
 		renderCanvasContainer();
 		renderPropertiesPanel();
-		highlightIds([id]);
+		highlightIds(currentSelection());
 	}
 
 	function renderPropertiesPanel() {
@@ -1719,7 +1909,12 @@ frappe.provide("pdffiller.designer");
 			});
 		});
 		body.querySelectorAll(".pfd-layout-item").forEach((item) => {
-			item.addEventListener("click", () => selectObject(item.dataset.objectId));
+			item.addEventListener("click", (e) => {
+				selectWithPointer(item.dataset.objectId, e, true);
+				renderCanvasContainer();
+				renderPropertiesPanel();
+				highlightIds(currentSelection());
+			});
 		});
 		body.addEventListener("mouseover", (e) => {
 			const el = hoverTarget(e.target);
@@ -1788,7 +1983,7 @@ frappe.provide("pdffiller.designer");
 		container.querySelector(".pfd-prev-page")?.addEventListener("click", () => {
 			if (state.currentPage > 0) {
 				state.currentPage -= 1;
-				state.selectedId = null;
+				clearSelection();
 				renderCanvasContainer();
 				renderPropertiesPanel();
 				if (state.refView === "layout") refreshRefBody();
@@ -1798,7 +1993,7 @@ frappe.provide("pdffiller.designer");
 		container.querySelector(".pfd-next-page")?.addEventListener("click", () => {
 			if (state.currentPage < state.pages.length - 1) {
 				state.currentPage += 1;
-				state.selectedId = null;
+				clearSelection();
 				renderCanvasContainer();
 				renderPropertiesPanel();
 				if (state.refView === "layout") refreshRefBody();
@@ -1845,8 +2040,12 @@ frappe.provide("pdffiller.designer");
 
 		overlay.addEventListener("mousedown", onOverlayMouseDown);
 		overlay.addEventListener("click", (e) => {
+			if (skipOverlayClick) {
+				skipOverlayClick = false;
+				return;
+			}
 			if (e.target === overlay) {
-				state.selectedId = null;
+				clearSelection();
 				renderPropertiesPanel();
 				renderCanvasContainer();
 			}
@@ -1950,28 +2149,103 @@ frappe.provide("pdffiller.designer");
 		});
 
 		panel.querySelector(".pfd-delete-field")?.addEventListener("click", deleteSelectedField);
+		panel.querySelector(".pfd-group-btn")?.addEventListener("click", groupSelection);
+		panel.querySelector(".pfd-ungroup-btn")?.addEventListener("click", ungroupSelection);
+	}
+
+	function startMarquee(overlay, e) {
+		const rect = overlay.getBoundingClientRect();
+		const originX = e.clientX;
+		const originY = e.clientY;
+		const box = document.createElement("div");
+		box.className = "pfd-marquee";
+		overlay.appendChild(box);
+		let moved = false;
+
+		function onMove(ev) {
+			const width = Math.abs(ev.clientX - originX);
+			const height = Math.abs(ev.clientY - originY);
+			box.style.left = `${Math.min(originX, ev.clientX) - rect.left}px`;
+			box.style.top = `${Math.min(originY, ev.clientY) - rect.top}px`;
+			box.style.width = `${width}px`;
+			box.style.height = `${height}px`;
+			if (width > 3 || height > 3) moved = true;
+		}
+
+		function onUp(ev) {
+			document.removeEventListener("mousemove", onMove);
+			document.removeEventListener("mouseup", onUp);
+			box.remove();
+			if (!moved) {
+				clearSelection();
+				renderPropertiesPanel();
+				renderCanvasContainer();
+				return;
+			}
+			skipOverlayClick = true;
+			const api = multiSelect();
+			const marquee = {
+				x: pxToPt(Math.min(originX, ev.clientX) - rect.left),
+				y: pxToPt(Math.min(originY, ev.clientY) - rect.top),
+				width: pxToPt(Math.abs(ev.clientX - originX)),
+				height: pxToPt(Math.abs(ev.clientY - originY)),
+			};
+			const hit = api
+				? getPageFields(state.currentPage)
+						.filter((field) => api.intersects(api.bounds(field), marquee))
+						.map((field) => field.id)
+				: [];
+			const additive = ev.shiftKey || ev.ctrlKey || ev.metaKey;
+			const ids = additive ? currentSelection().concat(hit) : hit;
+			commitSelection(ids, ids[ids.length - 1]);
+			state.selectionAnchor = ids[0] || null;
+			renderCanvasContainer();
+			renderPropertiesPanel();
+		}
+
+		document.addEventListener("mousemove", onMove);
+		document.addEventListener("mouseup", onUp);
 	}
 
 	function onOverlayMouseDown(e) {
+		if (e.button !== 0) return;
+		const boxEl = e.target.closest("[data-selection-box]");
 		const fieldEl = e.target.closest(".pfd-field-overlay");
-		if (!fieldEl) return;
+		if (!fieldEl && !boxEl) {
+			if (e.target.closest("button, input, select, textarea")) return;
+			startMarquee(e.currentTarget, e);
+			return;
+		}
 
 		e.preventDefault();
 		e.stopPropagation();
 
-		const field = state.fields.find((item) => item.id === fieldEl.dataset.fieldId);
+		const field = fieldEl
+			? state.fields.find((item) => item.id === fieldEl.dataset.fieldId)
+			: getSelectedField();
 		if (!field) return;
+		if (fieldEl) selectWithPointer(field.id, e, false);
 
-		state.selectedId = field.id;
+		const selected = selectedObjects();
+		const isResize = Boolean(fieldEl && e.target.dataset.resize === "1" && selected.length <= 1);
+		const movers = isResize ? [field] : selected;
+		dragState = {
+			field,
+			isResize,
+			startX: e.clientX,
+			startY: e.clientY,
+			startField: { ...field },
+			starts: movers.map((item) => ({
+				id: item.id,
+				x: item.x,
+				y: item.y,
+				width: item.width,
+				height: item.height,
+			})),
+			historyPushed: false,
+		};
 		renderPropertiesPanel();
 		renderCanvasContainer();
-
-		const isResize = e.target.dataset.resize === "1";
-		const startX = e.clientX;
-		const startY = e.clientY;
-		const startField = { ...field };
-
-		dragState = { field, isResize, startX, startY, startField, historyPushed: false };
 
 		document.addEventListener("mousemove", onDocumentMouseMove);
 		document.addEventListener("mouseup", onDocumentMouseUp);
@@ -1982,24 +2256,45 @@ frappe.provide("pdffiller.designer");
 			const dy = pxToPt(moveEvent.clientY - dragState.startY);
 			const page = getCurrentPage();
 			if (!page) return;
-
-			if (!dragState.historyPushed && (dx !== 0 || dy !== 0)) {
-				pushUndo(dragState.isResize ? `resize:${dragState.field.id}` : `move:${dragState.field.id}`);
-				dragState.historyPushed = true;
-			}
+			if (!dx && !dy) return;
 
 			if (dragState.isResize) {
 				const width = Math.max(MIN_WIDTH_PT, dragState.startField.width + dx);
 				const height = Math.max(MIN_HEIGHT_PT, dragState.startField.height + dy);
 				const maxWidth = page.width_pt - dragState.startField.x;
 				const maxHeight = page.height_pt - dragState.startField.y;
-				dragState.field.width = Math.min(width, maxWidth);
-				dragState.field.height = Math.min(height, maxHeight);
+				const next = {
+					x: dragState.startField.x,
+					y: dragState.startField.y,
+					width: Math.min(width, maxWidth),
+					height: Math.min(height, maxHeight),
+				};
+				if (resizeOverlaps(next, dragState.startField, dragState.field.id)) return;
+				if (!dragState.historyPushed) {
+					pushUndo(`resize:${dragState.field.id}`);
+					dragState.historyPushed = true;
+				}
+				dragState.field.width = next.width;
+				dragState.field.height = next.height;
 			} else {
-				const maxX = page.width_pt - dragState.startField.width;
-				const maxY = page.height_pt - dragState.startField.height;
-				dragState.field.x = clamp(dragState.startField.x + dx, 0, maxX);
-				dragState.field.y = clamp(dragState.startField.y + dy, 0, maxY);
+				const before = dragState.starts.map((item) => {
+					const current = state.fields.find((field) => field.id === item.id);
+					return current ? { id: current.id, x: current.x, y: current.y } : null;
+				});
+				const fitted = applyObjectMove(dragState.starts, dx, dy);
+				if (!fitted.dx && !fitted.dy) return;
+				if (!dragState.historyPushed) {
+					before.forEach((item) => {
+						const current = item && state.fields.find((field) => field.id === item.id);
+						if (current) {
+							current.x = item.x;
+							current.y = item.y;
+						}
+					});
+					pushUndo("move-selection");
+					dragState.historyPushed = true;
+					applyObjectMove(dragState.starts, dx, dy);
+				}
 			}
 
 			markDirty();
@@ -2009,6 +2304,7 @@ frappe.provide("pdffiller.designer");
 		function onDocumentMouseUp() {
 			document.removeEventListener("mousemove", onDocumentMouseMove);
 			document.removeEventListener("mouseup", onDocumentMouseUp);
+			if (dragState && dragState.historyPushed) skipOverlayClick = true;
 			dragState = null;
 		}
 	}
@@ -2030,8 +2326,22 @@ frappe.provide("pdffiller.designer");
 			redo();
 			return;
 		}
-
-		if (!state.selectedId) return;
+		if (modifier && key === "g") {
+			e.preventDefault();
+			if (e.shiftKey) ungroupSelection();
+			else groupSelection();
+			return;
+		}
+		if (!currentSelection().length) return;
+		if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown") {
+			e.preventDefault();
+			const step = e.shiftKey ? 10 : 1;
+			nudgeSelection(
+				e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0,
+				e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0
+			);
+			return;
+		}
 		if (e.key === "Delete" || e.key === "Backspace") {
 			e.preventDefault();
 			deleteSelectedField();

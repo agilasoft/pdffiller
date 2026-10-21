@@ -50,6 +50,11 @@ frappe.provide("pdffiller.print_designer");
 	let pageInstance = null;
 	let dragState = null;
 	let justDropped = false;
+	let undoStack = [];
+	let redoStack = [];
+	let applyingHistory = false;
+	const MAX_UNDO = 80;
+	const UNDO_COALESCE_MS = 500;
 
 	let state = {
 		designName: null,
@@ -67,6 +72,8 @@ frappe.provide("pdffiller.print_designer");
 		date_formats: ["", "%d-%m-%Y", "%m/%d/%Y", "%Y-%m-%d", "%d/%m/%Y"],
 		currentPage: 0,
 		selectedId: null,
+		selectedIds: [],
+		selectionAnchor: null,
 		dirty: false,
 		scale: 1,
 		elementCounter: 1,
@@ -119,6 +126,178 @@ frappe.provide("pdffiller.print_designer");
 
 	function getSelectedElement() {
 		return getPageElements().find((el) => el.id === state.selectedId) || null;
+	}
+
+	function multiSelect() {
+		return window.pdffiller && pdffiller.multi_select;
+	}
+
+	function groupMembers(id) {
+		const element = findElement(id);
+		if (!element) return [];
+		const groupId = multiSelect()?.cleanGroupId(element.group_id);
+		if (!groupId) return [element.id];
+		const page = (state.layout.pages || []).find((item) => (item.elements || []).some((el) => el.id === id));
+		return ((page && page.elements) || [])
+			.filter((el) => multiSelect().cleanGroupId(el.group_id) === groupId)
+			.map((el) => el.id);
+	}
+
+	function currentSelection() {
+		const valid = new Set(getPageElements().map((el) => el.id));
+		const ids = (state.selectedIds || []).filter((id) => valid.has(id));
+		if (state.selectedId && valid.has(state.selectedId) && !ids.includes(state.selectedId)) ids.push(state.selectedId);
+		return ids;
+	}
+
+	function commitSelection(ids, primary) {
+		const unique = multiSelect() ? multiSelect().unique(ids) : [...new Set((ids || []).filter(Boolean))];
+		state.selectedIds = unique;
+		state.selectedId = primary && unique.includes(primary) ? primary : unique[unique.length - 1] || null;
+	}
+
+	function clearSelection() {
+		commitSelection([], null);
+		state.selectionAnchor = null;
+	}
+
+	function selectWithPointer(id, event, fromLayout) {
+		const api = multiSelect();
+		if (!api || !event) {
+			commitSelection(groupMembers(id), id);
+			state.selectionAnchor = id;
+			return;
+		}
+		const ordered = fromLayout
+			? [...document.querySelectorAll(".pfd-ref-body .pfd-layout-item")].map((item) => item.dataset.objectId)
+			: getPageElements().map((el) => el.id);
+		const modifier = event.ctrlKey || event.metaKey;
+		const result = api.applySelection({
+			ids: currentSelection(),
+			targetId: id,
+			toggle: modifier,
+			extend: event.shiftKey,
+			range: Boolean(fromLayout && event.shiftKey),
+			orderedIds: ordered,
+			anchorId: state.selectionAnchor,
+			keepIfSelected: !fromLayout && !event.shiftKey && !modifier,
+			groupOf: groupMembers,
+		});
+		state.selectionAnchor = result.anchorId;
+		commitSelection(result.ids, id);
+	}
+
+	function selectedObjects() {
+		const ids = new Set(currentSelection());
+		return getPageElements().filter((el) => ids.has(el.id));
+	}
+
+	function selectionClass(id) {
+		const selected = currentSelection().includes(id) ? " pfd-selected" : "";
+		const element = findElement(id);
+		const grouped = element && multiSelect()?.cleanGroupId(element.group_id) ? " pfd-grouped" : "";
+		return selected + grouped;
+	}
+
+	function applyObjectMove(starts, dx, dy) {
+		const api = multiSelect();
+		if (!api) return { dx: 0, dy: 0 };
+		const moving = new Set(starts.map((item) => item.id));
+		const others = getPageElements().filter((el) => !moving.has(el.id));
+		const fitted = api.fitDelta(starts, dx, dy, state.layout.page_width, state.layout.page_height, others);
+		starts.forEach((start) => {
+			const element = findElement(start.id);
+			if (!element) return;
+			element.x = start.x + fitted.dx;
+			element.y = start.y + fitted.dy;
+		});
+		return fitted;
+	}
+
+	function resizeOverlaps(proposed, original, elementId) {
+		const api = multiSelect();
+		if (!api) return false;
+		const others = getPageElements().filter((el) => el.id !== elementId);
+		const blockers = others.filter((el) => !api.intersects(api.bounds(original), api.bounds(el)));
+		return blockers.some((el) => api.intersects(api.bounds(proposed), api.bounds(el)));
+	}
+
+	function renderSelectionBox() {
+		const api = multiSelect();
+		const objects = selectedObjects();
+		if (!api || objects.length < 2) return "";
+		const box = api.union(objects);
+		if (!box) return "";
+		return `<div class="pfd-selection-box" data-selection-box="1" style="left:${ptToPx(box.x)}px;top:${ptToPx(
+			box.y
+		)}px;width:${ptToPx(box.width)}px;height:${ptToPx(box.height)}px;"></div>`;
+	}
+
+	function renderSelectionActions() {
+		const ids = currentSelection();
+		const grouped = selectedObjects().some((el) => multiSelect()?.cleanGroupId(el.group_id));
+		if (ids.length < 2 && !grouped) return "";
+		const groupBtn =
+			ids.length >= 2
+				? `<button type="button" class="btn btn-default btn-sm pfd-group-btn">${__("Group")}</button>`
+				: "";
+		const ungroupBtn = grouped
+			? `<button type="button" class="btn btn-default btn-sm pfd-ungroup-btn">${__("Ungroup")}</button>`
+			: "";
+		return `<div class="pfd-prop-section pfd-multi-bar">
+			<div class="pfd-panel-title">${__("{0} selected", [String(ids.length)])}</div>
+			<div class="pfd-multi-actions">${groupBtn}${ungroupBtn}</div>
+		</div>`;
+	}
+
+	function groupSelection() {
+		const api = multiSelect();
+		const ids = currentSelection();
+		if (!api || ids.length < 2) return;
+		pushUndo("group");
+		const groupId = api.newGroupId();
+		getPageElements().forEach((el) => {
+			if (ids.includes(el.id)) el.group_id = groupId;
+		});
+		markDirty();
+		render();
+	}
+
+	function ungroupSelection() {
+		const api = multiSelect();
+		const ids = new Set(currentSelection());
+		const groupIds = new Set(
+			getPageElements()
+				.filter((el) => ids.has(el.id) && api?.cleanGroupId(el.group_id))
+				.map((el) => api.cleanGroupId(el.group_id))
+		);
+		if (!groupIds.size) return;
+		pushUndo("ungroup");
+		(state.layout.pages || []).forEach((page) => {
+			(page.elements || []).forEach((el) => {
+				if (groupIds.has(api.cleanGroupId(el.group_id))) el.group_id = "";
+			});
+		});
+		markDirty();
+		render();
+	}
+
+	function nudgeSelection(dx, dy) {
+		const objects = selectedObjects();
+		if (!objects.length || (!dx && !dy)) return;
+		const starts = objects.map((el) => ({ id: el.id, x: el.x, y: el.y, width: el.width, height: el.height }));
+		const fitted = applyObjectMove(starts, dx, dy);
+		if (!fitted.dx && !fitted.dy) return;
+		objects.forEach((el) => {
+			const start = starts.find((item) => item.id === el.id);
+			el.x = start.x;
+			el.y = start.y;
+		});
+		pushUndo("nudge", { coalesce: true });
+		applyObjectMove(starts, dx, dy);
+		markDirty();
+		renderCanvasContainer();
+		renderPropertiesPanel();
 	}
 
 	function pxPerPt() {
@@ -346,6 +525,70 @@ frappe.provide("pdffiller.print_designer");
 		state.dirty = true;
 	}
 
+	function cloneUndoableState() {
+		return {
+			layout: JSON.parse(JSON.stringify(state.layout)),
+			selectedId: state.selectedId,
+			selectedIds: [...(state.selectedIds || [])],
+			selectionAnchor: state.selectionAnchor,
+			currentPage: state.currentPage,
+			elementCounter: state.elementCounter,
+			paper_size: state.paper_size,
+			always_print_last: state.always_print_last,
+			dirty: state.dirty,
+		};
+	}
+
+	function restoreUndoableState(snapshot) {
+		state.layout = JSON.parse(JSON.stringify(snapshot.layout));
+		state.selectedId = snapshot.selectedId;
+		state.selectedIds = [...(snapshot.selectedIds || [])];
+		state.selectionAnchor = snapshot.selectionAnchor || null;
+		state.currentPage = snapshot.currentPage;
+		state.elementCounter = snapshot.elementCounter;
+		state.paper_size = snapshot.paper_size;
+		state.always_print_last = snapshot.always_print_last;
+		state.dirty = snapshot.dirty;
+	}
+
+	function clearHistory() {
+		undoStack = [];
+		redoStack = [];
+	}
+
+	function pushUndo(label, { coalesce = false } = {}) {
+		if (applyingHistory) return;
+		const now = Date.now();
+		const last = undoStack[undoStack.length - 1];
+		if (coalesce && last && last.label === label && now - last.time < UNDO_COALESCE_MS) {
+			last.time = now;
+			return;
+		}
+		undoStack.push({ label, time: now, snapshot: cloneUndoableState() });
+		if (undoStack.length > MAX_UNDO) undoStack.shift();
+		redoStack = [];
+	}
+
+	function undo() {
+		if (!undoStack.length) return;
+		const entry = undoStack.pop();
+		redoStack.push({ label: entry.label, time: Date.now(), snapshot: cloneUndoableState() });
+		applyingHistory = true;
+		restoreUndoableState(entry.snapshot);
+		applyingHistory = false;
+		render();
+	}
+
+	function redo() {
+		if (!redoStack.length) return;
+		const entry = redoStack.pop();
+		undoStack.push({ label: entry.label, time: Date.now(), snapshot: cloneUndoableState() });
+		applyingHistory = true;
+		restoreUndoableState(entry.snapshot);
+		applyingHistory = false;
+		render();
+	}
+
 	function normalizeLoadedElement(element) {
 		const aliases = { Text: "Data", Checkbox: "Check" };
 		const kind = element.kind || "field";
@@ -417,8 +660,9 @@ frappe.provide("pdffiller.print_designer");
 				}
 				state.layout = layout;
 				state.currentPage = 0;
-				state.selectedId = null;
+				clearSelection();
 				state.dirty = false;
+				clearHistory();
 				if (pageInstance) {
 					pageInstance.set_title(state.title || __("PDF Print Designer"));
 				}
@@ -464,6 +708,9 @@ frappe.provide("pdffiller.print_designer");
 						text: el.text || "",
 						image_url: el.image_url || "",
 						line_style: el.line_style || "solid",
+						...(multiSelect()?.cleanGroupId(el.group_id)
+							? { group_id: multiSelect().cleanGroupId(el.group_id) }
+							: {}),
 					};
 					if (el.kind === "field") {
 						Object.assign(payload, {
@@ -541,11 +788,13 @@ frappe.provide("pdffiller.print_designer");
 	}
 
 	function deleteSelected() {
-		if (!state.selectedId) return;
+		const ids = new Set(currentSelection());
+		if (!ids.size) return;
 		const page = getCurrentPage();
 		if (!page) return;
-		page.elements = (page.elements || []).filter((el) => el.id !== state.selectedId);
-		state.selectedId = null;
+		pushUndo("delete");
+		page.elements = (page.elements || []).filter((el) => !ids.has(el.id));
+		clearSelection();
 		markDirty();
 		render();
 	}
@@ -574,9 +823,10 @@ frappe.provide("pdffiller.print_designer");
 		};
 		const page = getCurrentPage();
 		if (!page) return;
+		pushUndo("add-element");
 		page.elements = page.elements || [];
 		page.elements.push(element);
-		state.selectedId = element.id;
+		commitSelection([element.id], element.id);
 		state.activeTool = kind;
 		markDirty();
 		render();
@@ -604,8 +854,9 @@ frappe.provide("pdffiller.print_designer");
 			...defaultMappingForType(type, spec),
 			...mappingOverrides,
 		};
+		pushUndo("add-field");
 		page.elements.push(field);
-		state.selectedId = field.id;
+		commitSelection([field.id], field.id);
 		markDirty();
 		render();
 	}
@@ -720,6 +971,7 @@ frappe.provide("pdffiller.print_designer");
 			});
 			return;
 		}
+		pushUndo("tile-rows");
 		page.elements = page.elements.filter(
 			(el) =>
 				!(
@@ -744,6 +996,7 @@ frappe.provide("pdffiller.print_designer");
 					repeat_slot: slot,
 					repeat_table: table,
 					repeat_field: proto.repeat_field || proto.source_field || "",
+					group_id: "",
 				});
 			});
 		}
@@ -940,6 +1193,7 @@ frappe.provide("pdffiller.print_designer");
 	function updateSelected(updates, options = {}) {
 		const el = getSelectedElement();
 		if (!el) return;
+		pushUndo("edit-element", { coalesce: true });
 		Object.assign(el, updates);
 		markDirty();
 		if (options.refreshCanvas) {
@@ -950,6 +1204,7 @@ frappe.provide("pdffiller.print_designer");
 	}
 
 	function setPaperSize(name) {
+		pushUndo("paper-size");
 		state.paper_size = name;
 		const size = state.paper_sizes[name];
 		if (size) {
@@ -961,9 +1216,10 @@ frappe.provide("pdffiller.print_designer");
 	}
 
 	function addPage() {
+		pushUndo("add-page");
 		state.layout.pages.push({ role: "Once", elements: [] });
 		state.currentPage = state.layout.pages.length - 1;
-		state.selectedId = null;
+		clearSelection();
 		markDirty();
 		render();
 	}
@@ -977,9 +1233,10 @@ frappe.provide("pdffiller.print_designer");
 			});
 			return;
 		}
+		pushUndo("remove-page");
 		state.layout.pages.splice(state.currentPage, 1);
 		state.currentPage = Math.min(state.currentPage, state.layout.pages.length - 1);
-		state.selectedId = null;
+		clearSelection();
 		markDirty();
 		render();
 	}
@@ -997,8 +1254,10 @@ frappe.provide("pdffiller.print_designer");
 		if (clone.kind === "field") {
 			clone.field_name = nextFieldName(clone.field_type);
 		}
+		delete clone.group_id;
+		pushUndo("duplicate");
 		page.elements.push(clone);
-		state.selectedId = clone.id;
+		commitSelection([clone.id], clone.id);
 		markDirty();
 		render();
 	}
@@ -1006,6 +1265,7 @@ frappe.provide("pdffiller.print_designer");
 	function moveSelectedZ(where) {
 		const page = getCurrentPage();
 		if (!page || !state.selectedId) return;
+		pushUndo("arrange");
 		const idx = page.elements.findIndex((el) => el.id === state.selectedId);
 		if (idx < 0) return;
 		const [el] = page.elements.splice(idx, 1);
@@ -1203,6 +1463,7 @@ frappe.provide("pdffiller.print_designer");
 				id: el.id,
 				label: friendlyFieldLabel(el),
 				meta: `${el.field_type || "Data"} · ${mapping}`,
+				grouped: multiSelect()?.cleanGroupId(el.group_id) ? 1 : 0,
 			};
 		}
 		const labels = {
@@ -1215,6 +1476,7 @@ frappe.provide("pdffiller.print_designer");
 			id: el.id,
 			label: el.kind === "text" ? el.text || labels.text : labels[el.kind] || el.kind,
 			meta: labels[el.kind] || el.kind,
+			grouped: multiSelect()?.cleanGroupId(el.group_id) ? 1 : 0,
 		};
 	}
 
@@ -1270,8 +1532,9 @@ frappe.provide("pdffiller.print_designer");
 	}
 
 	function renderLayoutItem(item) {
-		const selected = item.id === state.selectedId ? " pfd-layout-item--selected" : "";
-		return `<button type="button" class="pfd-ref-field pfd-layout-item${selected}" data-object-id="${frappe.utils.escape_html(
+		const selected = currentSelection().includes(item.id) ? " pfd-layout-item--selected" : "";
+		const grouped = item.grouped ? " pfd-layout-item--grouped" : "";
+		return `<button type="button" class="pfd-ref-field pfd-layout-item${selected}${grouped}" data-object-id="${frappe.utils.escape_html(
 			item.id
 		)}" title="${__("Select and highlight on the page")}">
 			<span class="pfd-ref-name">${frappe.utils.escape_html(item.label)}</span>
@@ -1375,7 +1638,7 @@ frappe.provide("pdffiller.print_designer");
 	}
 
 	function renderFieldOverlay(field) {
-		const selected = field.id === state.selectedId ? " pfd-selected" : "";
+		const selected = selectionClass(field.id);
 		const repeatClass = field.repeat_table ? " pfd-field-overlay--repeat" : "";
 		const mapLabel = field.repeat_table
 			? `${field.repeat_table}[${Number(field.repeat_slot || 0)}].${
@@ -1415,7 +1678,7 @@ frappe.provide("pdffiller.print_designer");
 	}
 
 	function renderStaticElement(el) {
-		const selected = el.id === state.selectedId ? " pfd-selected" : "";
+		const selected = selectionClass(el.id);
 		if (el.kind === "text") {
 			return `<div class="ppd-element ppd-element--text${selected}" data-element-id="${frappe.utils.escape_html(
 				el.id
@@ -1437,10 +1700,10 @@ frappe.provide("pdffiller.print_designer");
 		}
 		if (el.kind === "line") {
 			const g = lineGeometry(el);
-			const selected = el.id === state.selectedId ? " pfd-selected" : "";
+			const selected = selectionClass(el.id);
 			const dash = el.line_style === "dashed" ? 'stroke-dasharray="6 4"' : "";
 			const handles =
-				el.id === state.selectedId
+				el.id === state.selectedId && currentSelection().length <= 1
 					? `<div class="ppd-line-handle" data-endpoint="start" style="left:${g.x1 - 4}px;top:${
 							g.y1 - 4
 					  }px"></div>
@@ -1589,7 +1852,7 @@ frappe.provide("pdffiller.print_designer");
 				<div class="ppd-ruler-left">${renderRuler("y", state.layout.page_height, 24)}</div>
 				<div class="ppd-canvas-scroll">
 					<div class="pfd-canvas-wrap" style="width:${pageW}px;height:${pageH}px;">
-						<div class="pfd-canvas-overlay ppd-blank-page">${elementsHtml}${renderFloatToolbar(selected)}</div>
+						<div class="pfd-canvas-overlay ppd-blank-page">${elementsHtml}${renderSelectionBox()}${renderFloatToolbar(selected)}</div>
 					</div>
 				</div>
 				<div class="ppd-zoom-bar">
@@ -1609,11 +1872,15 @@ frappe.provide("pdffiller.print_designer");
 
 	function renderProperties() {
 		const el = getSelectedElement();
+		const actions = renderSelectionActions();
 		if (!el) {
-			return `<div class="pfd-empty-props">${__("Select an element to edit its properties")}</div>`;
+			return (
+				actions ||
+				`<div class="pfd-empty-props">${__("Select an element to edit its properties")}</div>`
+			);
 		}
-		if (el.kind === "field") return renderFieldProperties(el);
-		return renderStaticProperties(el);
+		if (el.kind === "field") return actions + renderFieldProperties(el);
+		return actions + renderStaticProperties(el);
 	}
 
 	function renderGeometryFields(el) {
@@ -2013,7 +2280,7 @@ frappe.provide("pdffiller.print_designer");
 
 	function idsForHoverElement(el) {
 		if (!el) return [];
-		if (el.classList.contains("pfd-layout-item")) return [el.dataset.objectId];
+		if (el.classList.contains("pfd-layout-item")) return groupMembers(el.dataset.objectId);
 		if (el.classList.contains("pfd-child-table-toggle")) {
 			const section = el.closest(".pfd-child-table");
 			if (!section) return [];
@@ -2058,10 +2325,11 @@ frappe.provide("pdffiller.print_designer");
 	}
 
 	function syncLayoutSelection() {
+		const selected = new Set(currentSelection());
 		document.querySelectorAll(".pfd-layout-item").forEach((item) => {
-			const on = item.dataset.objectId === state.selectedId;
+			const on = selected.has(item.dataset.objectId);
 			item.classList.toggle("pfd-layout-item--selected", on);
-			if (!on) return;
+			if (!on || item.dataset.objectId !== state.selectedId) return;
 			const section = item.closest(".pfd-child-table");
 			if (section && !section.classList.contains("pfd-child-table--open")) {
 				section.classList.add("pfd-child-table--open");
@@ -2074,10 +2342,11 @@ frappe.provide("pdffiller.print_designer");
 
 	function selectObject(id) {
 		if (!id) return;
-		state.selectedId = id;
+		commitSelection(groupMembers(id), id);
+		state.selectionAnchor = id;
 		renderCanvasContainer();
 		renderPropertiesPanel();
-		highlightIds([id]);
+		highlightIds(currentSelection());
 	}
 
 	function renderPropertiesPanel() {
@@ -2129,7 +2398,12 @@ frappe.provide("pdffiller.print_designer");
 			});
 		});
 		body.querySelectorAll(".pfd-layout-item").forEach((item) => {
-			item.addEventListener("click", () => selectObject(item.dataset.objectId));
+			item.addEventListener("click", (e) => {
+				selectWithPointer(item.dataset.objectId, e, true);
+				renderCanvasContainer();
+				renderPropertiesPanel();
+				highlightIds(currentSelection());
+			});
 		});
 		body.addEventListener("mouseover", (e) => {
 			const el = hoverTarget(e.target);
@@ -2204,7 +2478,7 @@ frappe.provide("pdffiller.print_designer");
 			btn.addEventListener("click", () => {
 				if (state.currentPage > 0) {
 					state.currentPage -= 1;
-					state.selectedId = null;
+					clearSelection();
 					renderCanvasContainer();
 					renderPropertiesPanel();
 					if (state.refView === "layout") refreshRefBody();
@@ -2215,7 +2489,7 @@ frappe.provide("pdffiller.print_designer");
 			btn.addEventListener("click", () => {
 				if (state.currentPage < state.layout.pages.length - 1) {
 					state.currentPage += 1;
-					state.selectedId = null;
+					clearSelection();
 					renderCanvasContainer();
 					renderPropertiesPanel();
 					if (state.refView === "layout") refreshRefBody();
@@ -2245,7 +2519,7 @@ frappe.provide("pdffiller.print_designer");
 		});
 		container.querySelector(".ppd-page-select")?.addEventListener("change", (e) => {
 			state.currentPage = parseInt(e.target.value, 10) || 0;
-			state.selectedId = null;
+			clearSelection();
 			renderCanvasContainer();
 			renderPropertiesPanel();
 			if (state.refView === "layout") refreshRefBody();
@@ -2315,7 +2589,7 @@ frappe.provide("pdffiller.print_designer");
 				addDrawElement(state.activeTool, pxToPt(e.clientX - rect.left), pxToPt(e.clientY - rect.top));
 				return;
 			}
-			state.selectedId = null;
+			clearSelection();
 			renderPropertiesPanel();
 			renderCanvasContainer();
 		});
@@ -2323,6 +2597,8 @@ frappe.provide("pdffiller.print_designer");
 
 	function bindPropertyEvents(panel) {
 		if (!panel) return;
+		panel.querySelector(".pfd-group-btn")?.addEventListener("click", groupSelection);
+		panel.querySelector(".pfd-ungroup-btn")?.addEventListener("click", ungroupSelection);
 		bindTextStyleEvents(panel, updateSelected);
 		panel.querySelector(".ppd-prop-text")?.addEventListener("input", (e) => {
 			updateSelected({ text: e.target.value }, { refreshCanvas: true });
@@ -2435,18 +2711,83 @@ frappe.provide("pdffiller.print_designer");
 		return null;
 	}
 
+	function startMarquee(overlay, e) {
+		const rect = overlay.getBoundingClientRect();
+		const originX = e.clientX;
+		const originY = e.clientY;
+		const box = document.createElement("div");
+		box.className = "pfd-marquee";
+		overlay.appendChild(box);
+		let moved = false;
+
+		function onMove(ev) {
+			const width = Math.abs(ev.clientX - originX);
+			const height = Math.abs(ev.clientY - originY);
+			box.style.left = `${Math.min(originX, ev.clientX) - rect.left}px`;
+			box.style.top = `${Math.min(originY, ev.clientY) - rect.top}px`;
+			box.style.width = `${width}px`;
+			box.style.height = `${height}px`;
+			if (width > 3 || height > 3) moved = true;
+		}
+
+		function onUp(ev) {
+			document.removeEventListener("mousemove", onMove);
+			document.removeEventListener("mouseup", onUp);
+			box.remove();
+			justDropped = true;
+			setTimeout(() => {
+				justDropped = false;
+			}, 50);
+			if (!moved) {
+				clearSelection();
+				renderPropertiesPanel();
+				renderCanvasContainer();
+				return;
+			}
+			const api = multiSelect();
+			const marquee = {
+				x: pxToPt(Math.min(originX, ev.clientX) - rect.left),
+				y: pxToPt(Math.min(originY, ev.clientY) - rect.top),
+				width: pxToPt(Math.abs(ev.clientX - originX)),
+				height: pxToPt(Math.abs(ev.clientY - originY)),
+			};
+			const hit = api
+				? getPageElements()
+						.filter((el) => api.intersects(api.bounds(el), marquee))
+						.map((el) => el.id)
+				: [];
+			const additive = ev.shiftKey || ev.ctrlKey || ev.metaKey;
+			const ids = additive ? currentSelection().concat(hit) : hit;
+			commitSelection(ids, ids[ids.length - 1]);
+			state.selectionAnchor = ids[0] || null;
+			renderCanvasContainer();
+			renderPropertiesPanel();
+		}
+
+		document.addEventListener("mousemove", onMove);
+		document.addEventListener("mouseup", onUp);
+	}
+
 	function onOverlayMouseDown(e) {
+		if (e.button !== 0) return;
+		const boxEl = e.target.closest("[data-selection-box]");
 		const elNode = e.target.closest("[data-element-id]");
-		if (!elNode) return;
+		if (!elNode && !boxEl) {
+			if (e.target.closest("button, input, select, textarea, .ppd-float-toolbar")) return;
+			if (state.activeTool) return;
+			startMarquee(e.currentTarget, e);
+			return;
+		}
 		e.preventDefault();
 		e.stopPropagation();
-		const field = findElement(elNode.dataset.elementId);
+		const field = elNode ? findElement(elNode.dataset.elementId) : getSelectedElement();
 		if (!field) return;
-		state.selectedId = field.id;
-		renderPropertiesPanel();
-		renderCanvasContainer();
-		const isResize = e.target.dataset.resize === "1";
-		const endpoint = e.target.dataset.endpoint || "";
+		if (elNode) selectWithPointer(field.id, e, false);
+		const selected = selectedObjects();
+		const single = selected.length <= 1;
+		const isResize = Boolean(elNode && e.target.dataset.resize === "1" && single);
+		const endpoint = single && elNode ? e.target.dataset.endpoint || "" : "";
+		const movers = isResize || endpoint ? [field] : selected;
 		dragState = {
 			field,
 			isResize,
@@ -2454,46 +2795,102 @@ frappe.provide("pdffiller.print_designer");
 			startX: e.clientX,
 			startY: e.clientY,
 			startField: { ...field },
+			starts: movers.map((item) => ({
+				id: item.id,
+				x: item.x,
+				y: item.y,
+				width: item.width,
+				height: item.height,
+			})),
+			historyPushed: false,
 		};
+		renderPropertiesPanel();
+		renderCanvasContainer();
 		document.addEventListener("mousemove", onDocumentMouseMove);
 		document.addEventListener("mouseup", onDocumentMouseUp);
+	}
+
+	function rememberMoveForUndo() {
+		if (!dragState || dragState.historyPushed) return;
+		const before = dragState.starts.map((item) => {
+			const current = findElement(item.id);
+			return current
+				? { id: current.id, x: current.x, y: current.y, width: current.width, height: current.height }
+				: null;
+		});
+		before.forEach((item) => {
+			const current = item && findElement(item.id);
+			if (!current) return;
+			current.x = item.x;
+			current.y = item.y;
+			current.width = item.width;
+			current.height = item.height;
+		});
+		pushUndo(dragState.isResize || dragState.endpoint ? "resize" : "move-selection");
+		dragState.historyPushed = true;
 	}
 
 	function onDocumentMouseMove(moveEvent) {
 		if (!dragState) return;
 		const dx = pxToPt(moveEvent.clientX - dragState.startX);
 		const dy = pxToPt(moveEvent.clientY - dragState.startY);
+		if (!dx && !dy) return;
 		const pageW = state.layout.page_width;
 		const pageH = state.layout.page_height;
+		const start = dragState.startField;
 		if (dragState.endpoint === "end" || dragState.endpoint === "start") {
-			const start = dragState.startField;
+			const next = { ...start };
 			if (dragState.endpoint === "end") {
-				dragState.field.width = start.width + dx;
+				next.width = start.width + dx;
 				let height = start.height + dy;
 				if (Math.abs(height) < 3) height = 0;
-				dragState.field.height = height;
+				next.height = height;
 			} else {
-				dragState.field.x = start.x + dx;
-				dragState.field.y = start.y + dy;
-				dragState.field.width = start.width - dx;
+				next.x = start.x + dx;
+				next.y = start.y + dy;
+				next.width = start.width - dx;
 				let height = start.height - dy;
 				if (Math.abs(height) < 3) height = 0;
-				dragState.field.height = height;
+				next.height = height;
 			}
+			if (resizeOverlaps(next, start, dragState.field.id)) return;
+			rememberMoveForUndo();
+			dragState.field.x = next.x;
+			dragState.field.y = next.y;
+			dragState.field.width = next.width;
+			dragState.field.height = next.height;
 		} else if (dragState.isResize) {
-			const width = Math.max(MIN_WIDTH_PT, dragState.startField.width + dx);
-			const height = Math.max(MIN_HEIGHT_PT, dragState.startField.height + dy);
-			dragState.field.width = Math.min(width, pageW - dragState.startField.x);
-			dragState.field.height = Math.min(height, pageH - dragState.startField.y);
+			const width = Math.max(MIN_WIDTH_PT, start.width + dx);
+			const height = Math.max(MIN_HEIGHT_PT, start.height + dy);
+			const next = {
+				x: start.x,
+				y: start.y,
+				width: Math.min(width, pageW - start.x),
+				height: Math.min(height, pageH - start.y),
+			};
+			if (resizeOverlaps(next, start, dragState.field.id)) return;
+			rememberMoveForUndo();
+			dragState.field.width = next.width;
+			dragState.field.height = next.height;
 		} else {
-			const hitH =
-				dragState.startField.kind === "line"
-					? Math.max(Math.abs(dragState.startField.height), 8)
-					: dragState.startField.height;
-			const maxX = pageW - Math.abs(dragState.startField.width);
-			const maxY = pageH - hitH;
-			dragState.field.x = clamp(dragState.startField.x + dx, 0, maxX);
-			dragState.field.y = clamp(dragState.startField.y + dy, 0, maxY);
+			const before = dragState.starts.map((item) => {
+				const current = findElement(item.id);
+				return current ? { id: current.id, x: current.x, y: current.y } : null;
+			});
+			const fitted = applyObjectMove(dragState.starts, dx, dy);
+			if (!fitted.dx && !fitted.dy) return;
+			if (!dragState.historyPushed) {
+				before.forEach((item) => {
+					const current = item && findElement(item.id);
+					if (current) {
+						current.x = item.x;
+						current.y = item.y;
+					}
+				});
+				pushUndo("move-selection");
+				dragState.historyPushed = true;
+				applyObjectMove(dragState.starts, dx, dy);
+			}
 		}
 		markDirty();
 		renderCanvasContainer();
@@ -2512,15 +2909,46 @@ frappe.provide("pdffiller.print_designer");
 	}
 
 	function onKeyDown(e) {
+		const route = frappe.get_route();
+		if (!Array.isArray(route) || route[0] !== "pdf-print-designer" || !getAppEl()) return;
 		const tag = (e.target && e.target.tagName) || "";
 		if (["INPUT", "TEXTAREA", "SELECT"].includes(tag)) return;
+		if (e.target && e.target.isContentEditable) return;
+		const key = (e.key || "").toLowerCase();
+		const modifier = e.ctrlKey || e.metaKey;
+		if (modifier && key === "z") {
+			e.preventDefault();
+			if (e.shiftKey) redo();
+			else undo();
+			return;
+		}
+		if (modifier && key === "y") {
+			e.preventDefault();
+			redo();
+			return;
+		}
+		if (modifier && key === "g") {
+			e.preventDefault();
+			if (e.shiftKey) ungroupSelection();
+			else groupSelection();
+			return;
+		}
 		if (e.key === "Escape") {
 			state.activeTool = "";
-			state.selectedId = null;
+			clearSelection();
 			render();
 			return;
 		}
-		if (!state.selectedId) return;
+		if (!currentSelection().length) return;
+		if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown") {
+			e.preventDefault();
+			const step = e.shiftKey ? 10 : 1;
+			nudgeSelection(
+				e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0,
+				e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0
+			);
+			return;
+		}
 		if (e.key === "Delete" || e.key === "Backspace") {
 			e.preventDefault();
 			deleteSelected();

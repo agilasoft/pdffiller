@@ -81,6 +81,39 @@ class TestPdfDesigner(unittest.TestCase):
 		self.assertEqual(by_name["customer_name"]["word_wrap"], 0)
 		self.assertEqual(by_name["agree_terms"]["field_type"], "Check")
 
+	def test_group_id_roundtrip(self):
+		fields = [
+			{
+				"field_name": "customer_name",
+				"field_type": "Data",
+				"page": 0,
+				"x": 72,
+				"y": 100,
+				"width": 200,
+				"height": 20,
+				"font_size": 10,
+				"group_id": "grp_block1",
+			},
+			{
+				"field_name": "city",
+				"field_type": "Data",
+				"page": 0,
+				"x": 72,
+				"y": 140,
+				"width": 120,
+				"height": 20,
+				"font_size": 10,
+				"group_id": "bad group",
+			},
+		]
+		pdf_bytes = apply_field_layout(self.plain_path, fields)
+		output_path = os.path.join(self.tempdir, "grouped.pdf")
+		with open(output_path, "wb") as handle:
+			handle.write(pdf_bytes)
+		layout = {field["field_name"]: field for field in list_field_layout(output_path)}
+		self.assertEqual(layout["customer_name"]["group_id"], "grp_block1")
+		self.assertNotIn("group_id", layout["city"])
+
 	def test_apply_field_layout_select_and_multiline(self):
 		fields = [
 			{

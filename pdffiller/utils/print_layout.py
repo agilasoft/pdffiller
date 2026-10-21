@@ -11,7 +11,13 @@ import frappe
 from frappe import _
 
 from pdffiller.utils.page_planner import PAGE_ROLES
-from pdffiller.utils.pdf_designer import DATE_FORMATS, FRAPPE_FIELD_TYPES, SOURCE_TYPES, _normalize_field_type
+from pdffiller.utils.pdf_designer import (
+	DATE_FORMATS,
+	FRAPPE_FIELD_TYPES,
+	SOURCE_TYPES,
+	_clean_group_id,
+	_normalize_field_type,
+)
 from pdffiller.utils.pdf_filler import normalize_text_style
 
 PAPER_SIZES = {
@@ -210,6 +216,9 @@ def _normalize_element(element: Any) -> dict | None:
 		"align": (element.get("align") or "left").strip() or "left",
 		"image_url": (element.get("image_url") or "").strip(),
 	}
+	group_id = _clean_group_id(element.get("group_id"))
+	if group_id:
+		normalized["group_id"] = group_id
 	style_type = None
 	if kind == FIELD_KIND:
 		style_type = _normalize_field_type(element.get("field_type"))
