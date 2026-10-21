@@ -71,6 +71,8 @@ frappe.provide("pdffiller.print_designer");
 		scale: 1,
 		elementCounter: 1,
 		fieldFilter: "",
+		refView: "fields",
+		expandedGroups: {},
 		leftTab: "elements",
 		activeTool: "",
 		zoom: 0.5,
@@ -399,6 +401,7 @@ frappe.provide("pdffiller.print_designer");
 				state.source_types = data.source_types || state.source_types;
 				state.date_formats = data.date_formats || state.date_formats;
 				state.child_tables = data.child_tables || [];
+				state.expandedGroups = {};
 				state.always_print_last = data.always_print_last ? 1 : 0;
 				const layout = data.layout || {
 					page_width: data.page_width || 595,
@@ -939,7 +942,10 @@ frappe.provide("pdffiller.print_designer");
 		if (!el) return;
 		Object.assign(el, updates);
 		markDirty();
-		if (options.refreshCanvas) renderCanvasContainer();
+		if (options.refreshCanvas) {
+			renderCanvasContainer();
+			if (state.refView === "layout") refreshRefBody();
+		}
 		if (options.refreshProperties) renderPropertiesPanel();
 	}
 
@@ -1079,14 +1085,7 @@ frappe.provide("pdffiller.print_designer");
 	}
 
 	function renderLeftPanel() {
-		if (state.leftTab === "fields") {
-			return `<input type="text" class="pfd-field-filter" placeholder="${__("Search fields…")}" value="${frappe.utils.escape_html(
-				state.fieldFilter
-			)}" />
-			<div class="pfd-ref-fields">${renderReferenceFields()}</div>
-			<div class="ppd-section-label">${__("Child Tables")}</div>
-			${renderChildTables()}`;
-		}
+		if (state.leftTab === "fields") return renderReferencePanel();
 		return `<div class="ppd-section-label">${__("Draw Elements")}</div>
 			${renderDrawTools()}
 			<div class="ppd-section-label ppd-bind-list">${__("Form Fields (Bind)")}</div>
@@ -1118,33 +1117,209 @@ frappe.provide("pdffiller.print_designer");
 			.join("");
 	}
 
+	function filterQuery() {
+		return (state.fieldFilter || "").trim().toLowerCase();
+	}
+
+	function renderGroup({ key, label, count, open, attrs, body }) {
+		return `<div class="pfd-child-table${open ? " pfd-child-table--open" : ""}" data-group="${frappe.utils.escape_html(
+			key
+		)}" ${attrs || ""}>
+			<button type="button" class="pfd-child-table-toggle" aria-expanded="${
+				open ? "true" : "false"
+			}" title="${__("Highlight matching objects on the page")}">
+				${frappe.utils.icon("down", "xs", "", "", "pfd-child-table-chevron")}
+				<span class="pfd-child-table-title">${frappe.utils.escape_html(label)}</span>
+				<span class="pfd-child-table-count">${count}</span>
+			</button>
+			<div class="pfd-child-table-body">${body}</div>
+		</div>`;
+	}
+
+	function renderChildFieldCard(table, field) {
+		return `<div
+			class="pfd-ref-field pfd-child-field"
+			data-table="${frappe.utils.escape_html(table.fieldname)}"
+			data-fieldname="${frappe.utils.escape_html(field.fieldname)}"
+			data-fieldtype="${frappe.utils.escape_html(field.fieldtype)}"
+			title="${__("Click to map. Hover to highlight placed fields.")}"
+		>
+			<span class="pfd-ref-name">${frappe.utils.escape_html(field.label || field.fieldname)}</span>
+			<span class="pfd-ref-meta">${frappe.utils.escape_html(table.fieldname)}.${frappe.utils.escape_html(
+				field.fieldname
+			)}</span>
+		</div>`;
+	}
+
 	function renderChildTables() {
 		if (!(state.child_tables || []).length) {
 			return `<div class="pfd-help-text">${__("No child tables on this DocType.")}</div>`;
 		}
-		return state.child_tables
+		const q = filterQuery();
+		const html = state.child_tables
 			.map((table) => {
-				const fields = (table.fields || [])
-					.map(
-						(field) => `<div
-						class="pfd-ref-field pfd-child-field"
-						data-table="${frappe.utils.escape_html(table.fieldname)}"
-						data-fieldname="${frappe.utils.escape_html(field.fieldname)}"
-						data-fieldtype="${frappe.utils.escape_html(field.fieldtype)}"
-					>
-						<span class="pfd-ref-name">${frappe.utils.escape_html(field.label || field.fieldname)}</span>
-						<span class="pfd-ref-meta">${frappe.utils.escape_html(table.fieldname)}.${frappe.utils.escape_html(
-							field.fieldname
-						)}</span>
-					</div>`
-					)
-					.join("");
-				return `<div class="pfd-child-table">
-					<div class="pfd-child-table-title">${frappe.utils.escape_html(table.label || table.fieldname)}</div>
-					${fields || `<div class="pfd-help-text">${__("No columns")}</div>`}
-				</div>`;
+				const visible = (table.fields || []).filter((field) => {
+					if (!q) return true;
+					return [table.fieldname, table.label, field.fieldname, field.label, field.fieldtype]
+						.join(" ")
+						.toLowerCase()
+						.includes(q);
+				});
+				if (!visible.length) return "";
+				const key = `child:${table.fieldname}`;
+				return renderGroup({
+					key,
+					label: table.label || table.fieldname,
+					count: visible.length,
+					open: !!q || !!state.expandedGroups[key],
+					attrs: `data-table="${frappe.utils.escape_html(table.fieldname)}"`,
+					body: visible.map((field) => renderChildFieldCard(table, field)).join(""),
+				});
+			})
+			.filter(Boolean)
+			.join("");
+		return html || `<div class="pfd-help-text">${__("No matching fields.")}</div>`;
+	}
+
+	function friendlyFieldLabel(field) {
+		if (field.repeat_table) {
+			const table = (state.child_tables || []).find((row) => row.fieldname === field.repeat_table);
+			const col = ((table && table.fields) || []).find(
+				(item) => item.fieldname === (field.repeat_field || field.source_field)
+			);
+			const name = (col && (col.label || col.fieldname)) || field.field_name || __("Field");
+			return `${name} · ${__("Row {0}", [Number(field.repeat_slot || 0) + 1])}`;
+		}
+		const ref = (state.reference_fields || []).find((row) => row.fieldname === field.source_field);
+		return (ref && (ref.label || ref.fieldname)) || field.field_name || __("Field");
+	}
+
+	function layoutItemFromElement(el) {
+		if (el.kind === "field") {
+			const mapping = el.repeat_table
+				? `${el.repeat_table}[${Number(el.repeat_slot || 0)}].${el.repeat_field || el.source_field || ""}`
+				: el.source_field || __("Unmapped");
+			return {
+				id: el.id,
+				label: friendlyFieldLabel(el),
+				meta: `${el.field_type || "Data"} · ${mapping}`,
+			};
+		}
+		const labels = {
+			text: __("Text"),
+			rect: __("Rectangle"),
+			line: __("Line"),
+			image: __("Image"),
+		};
+		return {
+			id: el.id,
+			label: el.kind === "text" ? el.text || labels.text : labels[el.kind] || el.kind,
+			meta: labels[el.kind] || el.kind,
+		};
+	}
+
+	function layoutGroups() {
+		const q = filterQuery();
+		const objects = getPageElements()
+			.slice()
+			.sort((a, b) => a.y - b.y || a.x - b.x);
+		const groups = [];
+		const pushGroup = (key, label, elements) => {
+			const items = elements.map(layoutItemFromElement).filter((item) => {
+				if (!q) return true;
+				if ((label || "").toLowerCase().includes(q)) return true;
+				return item.label.toLowerCase().includes(q) || item.meta.toLowerCase().includes(q);
+			});
+			if (items.length) groups.push({ key, label, items });
+		};
+		pushGroup(
+			"text",
+			__("Text"),
+			objects.filter((el) => el.kind === "text")
+		);
+		pushGroup(
+			"shapes",
+			__("Shapes"),
+			objects.filter((el) => el.kind === "rect" || el.kind === "line")
+		);
+		pushGroup(
+			"images",
+			__("Images"),
+			objects.filter((el) => el.kind === "image")
+		);
+		pushGroup(
+			"fields",
+			__("Fields"),
+			objects.filter((el) => el.kind === "field" && !el.repeat_table)
+		);
+		const names = (state.child_tables || []).map((table) => table.fieldname);
+		objects.forEach((el) => {
+			if (el.kind === "field" && el.repeat_table && !names.includes(el.repeat_table)) {
+				names.push(el.repeat_table);
+			}
+		});
+		names.forEach((name) => {
+			const table = (state.child_tables || []).find((row) => row.fieldname === name);
+			pushGroup(
+				`table:${name}`,
+				(table && (table.label || table.fieldname)) || name,
+				objects.filter((el) => el.kind === "field" && el.repeat_table === name)
+			);
+		});
+		return groups;
+	}
+
+	function renderLayoutItem(item) {
+		const selected = item.id === state.selectedId ? " pfd-layout-item--selected" : "";
+		return `<button type="button" class="pfd-ref-field pfd-layout-item${selected}" data-object-id="${frappe.utils.escape_html(
+			item.id
+		)}" title="${__("Select and highlight on the page")}">
+			<span class="pfd-ref-name">${frappe.utils.escape_html(item.label)}</span>
+			<span class="pfd-ref-meta">${frappe.utils.escape_html(item.meta)}</span>
+		</button>`;
+	}
+
+	function renderLayout() {
+		const groups = layoutGroups();
+		if (!groups.length) {
+			return `<div class="pfd-help-text">${
+				filterQuery() ? __("No matching objects.") : __("Nothing on this page yet.")
+			}</div>`;
+		}
+		const q = filterQuery();
+		return groups
+			.map((group) => {
+				const key = `layout:${group.key}`;
+				const containsSelected = group.items.some((item) => item.id === state.selectedId);
+				return renderGroup({
+					key,
+					label: group.label,
+					count: group.items.length,
+					open: !!q || containsSelected || !!state.expandedGroups[key],
+					attrs: `data-layout-group="${frappe.utils.escape_html(group.key)}"`,
+					body: group.items.map(renderLayoutItem).join(""),
+				});
 			})
 			.join("");
+	}
+
+	function renderReferencePanel() {
+		const view = state.refView || "fields";
+		return `<select class="pfd-ref-view" aria-label="${__("Sidebar view")}">
+			<option value="fields" ${view === "fields" ? "selected" : ""}>${__("Fields")}</option>
+			<option value="child" ${view === "child" ? "selected" : ""}>${__("Child Tables")}</option>
+			<option value="layout" ${view === "layout" ? "selected" : ""}>${__("Layout")}</option>
+		</select>
+		<input type="text" class="pfd-field-filter" placeholder="${__("Search…")}" value="${frappe.utils.escape_html(
+			state.fieldFilter || ""
+		)}" />
+		<div class="pfd-ref-body">${renderRefBody()}</div>`;
+	}
+
+	function renderRefBody() {
+		if (state.refView === "child") return renderChildTables();
+		if (state.refView === "layout") return renderLayout();
+		return renderReferenceFields();
 	}
 
 	function renderSelectOptions(options, selected) {
@@ -1766,6 +1941,8 @@ frappe.provide("pdffiller.print_designer");
 		container.innerHTML = renderCanvas();
 		bindCanvasEvents(container);
 		renderBarcodePreviews(container);
+		syncLayoutSelection();
+		if (highlightHover) highlightIds(idsForHoverElement(highlightHover));
 	}
 
 	function renderBarcodePreviews(root = document) {
@@ -1793,11 +1970,114 @@ frappe.provide("pdffiller.print_designer");
 		frappe.require("/assets/frappe/js/lib/JsBarcode.all.min.js", draw);
 	}
 
-	function renderReferenceFieldsPanel() {
-		const panel = document.querySelector(".pfd-ref-fields");
-		if (!panel) return;
-		panel.innerHTML = renderReferenceFields();
-		bindReferenceFieldEvents(panel);
+	let highlightHover = null;
+
+	function refreshRefBody() {
+		const body = document.querySelector(".pfd-ref-body");
+		if (!body) return;
+		highlightHover = null;
+		highlightIds([]);
+		body.innerHTML = renderRefBody();
+		bindRefBodyEvents(body);
+	}
+
+	function pageFields() {
+		return getPageElements().filter((el) => el.kind === "field");
+	}
+
+	function idsForSourceField(fieldname) {
+		return pageFields()
+			.filter((field) => !field.repeat_table && field.source_field === fieldname)
+			.map((field) => field.id);
+	}
+
+	function idsForChild(table, fieldname) {
+		return pageFields()
+			.filter((field) => {
+				if (field.repeat_table !== table) return false;
+				if (!fieldname) return true;
+				return field.repeat_field === fieldname || field.source_field === fieldname;
+			})
+			.map((field) => field.id);
+	}
+
+	function hoverTarget(node) {
+		if (!node || !node.closest) return null;
+		return (
+			node.closest(".pfd-layout-item") ||
+			node.closest(".pfd-child-field") ||
+			node.closest(".pfd-ref-field") ||
+			node.closest(".pfd-child-table-toggle")
+		);
+	}
+
+	function idsForHoverElement(el) {
+		if (!el) return [];
+		if (el.classList.contains("pfd-layout-item")) return [el.dataset.objectId];
+		if (el.classList.contains("pfd-child-table-toggle")) {
+			const section = el.closest(".pfd-child-table");
+			if (!section) return [];
+			if (section.dataset.layoutGroup) {
+				return [...section.querySelectorAll(".pfd-layout-item")].map((item) => item.dataset.objectId);
+			}
+			if (section.dataset.table) return idsForChild(section.dataset.table);
+			return [];
+		}
+		if (el.classList.contains("pfd-child-field")) {
+			return idsForChild(el.dataset.table, el.dataset.fieldname);
+		}
+		if (el.classList.contains("pfd-ref-field")) return idsForSourceField(el.dataset.fieldname);
+		return [];
+	}
+
+	function revealOnDesk(el) {
+		const scroller = el.closest(".ppd-canvas-scroll, .pfd-center");
+		if (!scroller) return;
+		const elRect = el.getBoundingClientRect();
+		const scRect = scroller.getBoundingClientRect();
+		const pad = 24;
+		if (elRect.top < scRect.top + pad) scroller.scrollTop -= scRect.top + pad - elRect.top;
+		else if (elRect.bottom > scRect.bottom - pad) scroller.scrollTop += elRect.bottom - (scRect.bottom - pad);
+		if (elRect.left < scRect.left + pad) scroller.scrollLeft -= scRect.left + pad - elRect.left;
+		else if (elRect.right > scRect.right - pad) scroller.scrollLeft += elRect.right - (scRect.right - pad);
+	}
+
+	function highlightIds(ids) {
+		const set = new Set(ids || []);
+		let first = null;
+		document
+			.querySelectorAll(".pfd-canvas-container .pfd-field-overlay, .pfd-canvas-container .ppd-element")
+			.forEach((el) => {
+				const id = el.dataset.fieldId || el.dataset.elementId;
+				const on = !!id && set.has(id);
+				el.classList.toggle("pfd-highlighted", on);
+				if (!on) return;
+				if (!first || el.getBoundingClientRect().top < first.getBoundingClientRect().top) first = el;
+			});
+		if (first) revealOnDesk(first);
+	}
+
+	function syncLayoutSelection() {
+		document.querySelectorAll(".pfd-layout-item").forEach((item) => {
+			const on = item.dataset.objectId === state.selectedId;
+			item.classList.toggle("pfd-layout-item--selected", on);
+			if (!on) return;
+			const section = item.closest(".pfd-child-table");
+			if (section && !section.classList.contains("pfd-child-table--open")) {
+				section.classList.add("pfd-child-table--open");
+				if (section.dataset.group) state.expandedGroups[section.dataset.group] = true;
+				section.querySelector(".pfd-child-table-toggle")?.setAttribute("aria-expanded", "true");
+				item.scrollIntoView({ block: "nearest" });
+			}
+		});
+	}
+
+	function selectObject(id) {
+		if (!id) return;
+		state.selectedId = id;
+		renderCanvasContainer();
+		renderPropertiesPanel();
+		highlightIds([id]);
 	}
 
 	function renderPropertiesPanel() {
@@ -1807,9 +2087,30 @@ frappe.provide("pdffiller.print_designer");
 		bindPropertyEvents(panel);
 	}
 
-	function bindReferenceFieldEvents(container) {
-		if (!container) return;
-		container.querySelectorAll(".pfd-ref-field:not(.pfd-child-field)").forEach((item) => {
+	function bindRefBodyEvents(body) {
+		if (!body) return;
+		body.querySelectorAll(".pfd-child-table-toggle").forEach((btn) => {
+			btn.addEventListener("click", () => {
+				const section = btn.closest(".pfd-child-table");
+				if (!section) return;
+				const key = section.dataset.group;
+				const open = !state.expandedGroups[key];
+				state.expandedGroups[key] = open;
+				section.classList.toggle("pfd-child-table--open", open);
+				btn.setAttribute("aria-expanded", open ? "true" : "false");
+			});
+		});
+		body.querySelectorAll(".pfd-child-field").forEach((item) => {
+			item.addEventListener("click", () => {
+				const table = (state.child_tables || []).find((row) => row.fieldname === item.dataset.table);
+				if (!table) return;
+				mapChildField(table, {
+					fieldname: item.dataset.fieldname,
+					fieldtype: item.dataset.fieldtype,
+				});
+			});
+		});
+		body.querySelectorAll(".pfd-ref-field:not(.pfd-child-field):not(.pfd-layout-item)").forEach((item) => {
 			item.addEventListener("click", () => {
 				mapReferenceField({
 					fieldname: item.dataset.fieldname,
@@ -1826,6 +2127,19 @@ frappe.provide("pdffiller.print_designer");
 				);
 				e.dataTransfer.effectAllowed = "copy";
 			});
+		});
+		body.querySelectorAll(".pfd-layout-item").forEach((item) => {
+			item.addEventListener("click", () => selectObject(item.dataset.objectId));
+		});
+		body.addEventListener("mouseover", (e) => {
+			const el = hoverTarget(e.target);
+			if (!el || el === highlightHover) return;
+			highlightHover = el;
+			highlightIds(idsForHoverElement(el));
+		});
+		body.addEventListener("mouseleave", () => {
+			highlightHover = null;
+			highlightIds([]);
 		});
 	}
 
@@ -1871,28 +2185,17 @@ frappe.provide("pdffiller.print_designer");
 				if (item.dataset.childRow) addChildTableRow();
 			});
 		});
+		app.querySelector(".pfd-ref-view")?.addEventListener("change", (e) => {
+			state.refView = e.target.value;
+			refreshRefBody();
+		});
 		app.querySelector(".pfd-field-filter")?.addEventListener("input", (e) => {
 			state.fieldFilter = e.target.value;
-			renderReferenceFieldsPanel();
+			refreshRefBody();
 		});
-		bindReferenceFieldEvents(app.querySelector(".pfd-ref-fields"));
-		bindChildTableEvents(app);
+		bindRefBodyEvents(app.querySelector(".pfd-ref-body"));
 		bindCanvasEvents(app.querySelector(".pfd-canvas-container"));
 		bindPropertyEvents(app.querySelector(".pfd-properties"));
-	}
-
-	function bindChildTableEvents(container) {
-		if (!container) return;
-		container.querySelectorAll(".pfd-child-field").forEach((item) => {
-			item.addEventListener("click", () => {
-				const table = (state.child_tables || []).find((row) => row.fieldname === item.dataset.table);
-				if (!table) return;
-				mapChildField(table, {
-					fieldname: item.dataset.fieldname,
-					fieldtype: item.dataset.fieldtype,
-				});
-			});
-		});
 	}
 
 	function bindCanvasEvents(container) {
@@ -1904,6 +2207,7 @@ frappe.provide("pdffiller.print_designer");
 					state.selectedId = null;
 					renderCanvasContainer();
 					renderPropertiesPanel();
+					if (state.refView === "layout") refreshRefBody();
 				}
 			});
 		});
@@ -1914,6 +2218,7 @@ frappe.provide("pdffiller.print_designer");
 					state.selectedId = null;
 					renderCanvasContainer();
 					renderPropertiesPanel();
+					if (state.refView === "layout") refreshRefBody();
 				}
 			});
 		});
@@ -1943,6 +2248,7 @@ frappe.provide("pdffiller.print_designer");
 			state.selectedId = null;
 			renderCanvasContainer();
 			renderPropertiesPanel();
+			if (state.refView === "layout") refreshRefBody();
 		});
 		container.querySelector(".pfd-always-print-last")?.addEventListener("change", (e) => {
 			state.always_print_last = e.target.checked ? 1 : 0;
