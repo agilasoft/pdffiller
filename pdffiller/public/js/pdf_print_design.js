@@ -1,8 +1,19 @@
 // Copyright (c) 2026, Agilasoft Cloud Technologies Inc. and contributors
 // For license information, please see license.txt
 
+function removeWorkdeskPanel(frm) {
+	const page = frm.page && frm.page.wrapper;
+	if (!page) return;
+	page.find(".wd-layout").remove();
+	page.find(".wd-layout-toggle").remove();
+	page.find(".layout-main").removeClass("wd-layout-active");
+	page.find(".layout-side-section").removeClass("wd-native-side-hidden");
+}
+
 frappe.ui.form.on("PDF Print Design", {
 	refresh(frm) {
+		removeWorkdeskPanel(frm);
+		setTimeout(() => removeWorkdeskPanel(frm), 0);
 		frm.add_custom_button(__("Import"), function () {
 			pdffiller.transfer.import_templates(function (summary) {
 				const title = frm.doc.title;

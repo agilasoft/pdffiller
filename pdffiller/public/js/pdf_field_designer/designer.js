@@ -62,6 +62,7 @@ frappe.provide("pdffiller.designer");
 		fieldFilter: "",
 		refView: "fields",
 		collapsedSections: {
+			layout: false,
 			fieldTypes: false,
 			referenceFields: false,
 			childTables: false,
@@ -1258,7 +1259,7 @@ frappe.provide("pdffiller.designer");
 		markDirty();
 		if (options.refreshCanvas) {
 			renderCanvasContainer();
-			if (state.refView === "layout") refreshRefBody();
+			refreshLayoutBody();
 		}
 		if (options.refreshProperties) {
 			renderPropertiesPanel();
@@ -1471,7 +1472,6 @@ frappe.provide("pdffiller.designer");
 		return `<select class="pfd-ref-view" aria-label="${__("Sidebar view")}">
 			<option value="fields" ${view === "fields" ? "selected" : ""}>${__("Fields")}</option>
 			<option value="child" ${view === "child" ? "selected" : ""}>${__("Child Tables")}</option>
-			<option value="layout" ${view === "layout" ? "selected" : ""}>${__("Layout")}</option>
 		</select>
 		<input type="text" class="pfd-field-filter" placeholder="${__("Search…")}" value="${frappe.utils.escape_html(
 			state.fieldFilter || ""
@@ -1481,7 +1481,6 @@ frappe.provide("pdffiller.designer");
 
 	function renderRefBody() {
 		if (state.refView === "child") return renderChildTables();
-		if (state.refView === "layout") return renderLayout();
 		return renderReferenceFields();
 	}
 
@@ -1820,6 +1819,7 @@ frappe.provide("pdffiller.designer");
 			</div>
 			<div class="pfd-main">
 				<div class="pfd-left">
+					${renderCollapsibleSection("layout", __("Layout"), `<div class="pfd-layout-body">${renderLayout()}</div>`)}
 					${renderCollapsibleSection("fieldTypes", __("Field Types"), renderPalette())}
 					${renderCollapsibleSection("referenceFields", __("Reference Fields"), renderReferencePanel())}
 				</div>
@@ -1881,8 +1881,16 @@ frappe.provide("pdffiller.designer");
 
 	let highlightHover = null;
 
+	function refreshLayoutBody() {
+		const body = document.querySelector(".pfd-layout-body");
+		if (!body) return;
+		body.innerHTML = renderLayout();
+		bindRefBodyEvents(body);
+	}
+
 	function refreshRefBody() {
 		const body = document.querySelector(".pfd-ref-body");
+		refreshLayoutBody();
 		if (!body) return;
 		highlightHover = null;
 		highlightIds([]);
@@ -2111,6 +2119,7 @@ frappe.provide("pdffiller.designer");
 			state.fieldFilter = e.target.value;
 			refreshRefBody();
 		});
+		bindRefBodyEvents(app.querySelector(".pfd-layout-body"));
 		bindRefBodyEvents(app.querySelector(".pfd-ref-body"));
 		bindCanvasEvents(app.querySelector(".pfd-canvas-container"));
 		bindPropertyEvents(app.querySelector(".pfd-properties"));
@@ -2131,7 +2140,7 @@ frappe.provide("pdffiller.designer");
 				clearSelection();
 				renderCanvasContainer();
 				renderPropertiesPanel();
-				if (state.refView === "layout") refreshRefBody();
+				refreshLayoutBody();
 			}
 		});
 
@@ -2141,7 +2150,7 @@ frappe.provide("pdffiller.designer");
 				clearSelection();
 				renderCanvasContainer();
 				renderPropertiesPanel();
-				if (state.refView === "layout") refreshRefBody();
+				refreshLayoutBody();
 			}
 		});
 

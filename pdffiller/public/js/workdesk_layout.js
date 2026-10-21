@@ -652,6 +652,10 @@ frappe.provide("pdffiller.workdesk");
 	}
 
 	function mount(frm) {
+		if (isDesignDocument(frm)) {
+			unmount(frm);
+			return;
+		}
 		const main = frm.page.wrapper.find(".layout-main");
 		if (!main.length) return;
 		main.addClass("wd-layout-active");
@@ -703,7 +707,7 @@ frappe.provide("pdffiller.workdesk");
 		const main = page.find(".layout-main");
 		main.removeClass("wd-layout-active");
 		main.children(".layout-side-section").removeClass("wd-native-side-hidden");
-		main.children(".wd-layout").remove();
+		main.find(".wd-layout").remove();
 	}
 
 	function setToggle(frm) {
@@ -712,6 +716,10 @@ frappe.provide("pdffiller.workdesk");
 	}
 
 	function setOpen(frm, open) {
+		if (isDesignDocument(frm)) {
+			unmount(frm);
+			return;
+		}
 		state.open = !!open;
 		localStorage.setItem(STORAGE_KEY, state.open ? "1" : "0");
 		if (state.open) mount(frm);
