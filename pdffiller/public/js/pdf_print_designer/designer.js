@@ -236,7 +236,8 @@ frappe.provide("pdffiller.print_designer");
 	function renderSelectionActions() {
 		const ids = currentSelection();
 		const grouped = selectedObjects().some((el) => multiSelect()?.cleanGroupId(el.group_id));
-		if (ids.length < 2 && !grouped) return "";
+		const canPaste = Boolean(multiSelect()?.hasClipboard());
+		if (!ids.length && !canPaste) return "";
 		const groupBtn =
 			ids.length >= 2
 				? `<button type="button" class="btn btn-default btn-sm pfd-group-btn">${__("Group")}</button>`
@@ -244,9 +245,19 @@ frappe.provide("pdffiller.print_designer");
 		const ungroupBtn = grouped
 			? `<button type="button" class="btn btn-default btn-sm pfd-ungroup-btn">${__("Ungroup")}</button>`
 			: "";
+		const copyBtn = ids.length
+			? `<button type="button" class="btn btn-default btn-sm pfd-copy-btn">${__("Copy")}</button>`
+			: "";
+		const pasteBtn = `<button type="button" class="btn btn-default btn-sm pfd-paste-btn" ${
+			canPaste ? "" : "disabled"
+		}>${__("Paste")}</button>`;
+		const title =
+			ids.length > 1 || grouped
+				? `<div class="pfd-panel-title">${__("{0} selected", [String(ids.length)])}</div>`
+				: "";
 		return `<div class="pfd-prop-section pfd-multi-bar">
-			<div class="pfd-panel-title">${__("{0} selected", [String(ids.length)])}</div>
-			<div class="pfd-multi-actions">${groupBtn}${ungroupBtn}</div>
+			${title}
+			<div class="pfd-multi-actions">${copyBtn}${pasteBtn}${groupBtn}${ungroupBtn}</div>
 		</div>`;
 	}
 
@@ -298,6 +309,115 @@ frappe.provide("pdffiller.print_designer");
 		markDirty();
 		renderCanvasContainer();
 		renderPropertiesPanel();
+	}
+
+	function copySelection() {
+		const api = multiSelect();
+		const objects = selectedObjects();
+		if (!api || !objects.length) {
+			frappe.show_alert({ message: __("Select an object to copy"), indicator: "orange" });
+			return;
+		}
+		api.writeClipboard({
+			source: {
+				editor: "print",
+				document: state.designName || "",
+				reference_doctype: state.reference_doctype || "",
+				page: state.currentPage,
+			},
+			objects: objects.map((el) => ({ ...el })),
+		});
+		frappe.show_alert({
+			message: __("Copied {0} object(s)", [String(objects.length)]),
+			indicator: "green",
+		});
+		renderPropertiesPanel();
+	}
+
+	function pasteClipboard() {
+		const api = multiSelect();
+		const clip = api && api.readClipboard();
+		const page = getCurrentPage();
+		if (!api || !clip || !page) {
+			frappe.show_alert({ message: __("Nothing to paste"), indicator: "orange" });
+			return;
+		}
+		const source = clip.source || {};
+		const prepared = api.preparePaste(clip, {
+			editor: "print",
+			pageIndex: state.currentPage,
+			pageWidth: state.layout.page_width,
+			pageHeight: state.layout.page_height,
+			obstacles: getPageElements(),
+			existingNames: allFieldNames(),
+			referenceFields: state.reference_fields,
+			childTables: state.child_tables,
+			sameDocument: source.editor === "print" && source.document === state.designName,
+			samePage: source.editor === "print" && source.document === state.designName && source.page === state.currentPage,
+		});
+		if (!prepared.objects.length) {
+			frappe.show_alert({ message: __("Nothing to paste"), indicator: "orange" });
+			return;
+		}
+		pushUndo("paste");
+		page.elements = page.elements || [];
+		const ids = [];
+		prepared.objects.forEach((obj) => {
+			const element = normalizeLoadedElement({ ...obj, id: nextElementId() });
+			page.elements.push(element);
+			ids.push(element.id);
+		});
+		commitSelection(ids, ids[ids.length - 1]);
+		state.selectionAnchor = ids[0] || null;
+		markDirty();
+		render();
+		reportPaste(prepared);
+	}
+
+	function reportPaste(prepared) {
+		if (prepared.cleared.length) {
+			frappe.show_alert({
+				message: __(
+					"Pasted {0} object(s). Cleared mappings that are not on this document: {1}",
+					[String(prepared.objects.length), prepared.cleared.join(", ")]
+				),
+				indicator: "orange",
+			});
+		} else {
+			frappe.show_alert({
+				message: __("Pasted {0} object(s)", [String(prepared.objects.length)]),
+				indicator: "green",
+			});
+		}
+	}
+
+	function openClipboardMenu(x, y) {
+		const api = multiSelect();
+		if (!api) return;
+		api.openContextMenu(x, y, [
+			{
+				action: "copy",
+				label: __("Copy"),
+				shortcut: "Ctrl+C",
+				disabled: !currentSelection().length,
+				onSelect: copySelection,
+			},
+			{
+				action: "paste",
+				label: __("Paste"),
+				shortcut: "Ctrl+V",
+				disabled: !api.hasClipboard(),
+				onSelect: pasteClipboard,
+			},
+		]);
+	}
+
+	function selectForClipboard(id, fromLayout) {
+		if (!id || currentSelection().includes(id)) return;
+		selectWithPointer(id, { ctrlKey: false, metaKey: false, shiftKey: false }, fromLayout);
+		renderCanvasContainer();
+		renderPropertiesPanel();
+		highlightIds(currentSelection());
 	}
 
 	function pxPerPt() {
@@ -2404,6 +2524,12 @@ frappe.provide("pdffiller.print_designer");
 				renderPropertiesPanel();
 				highlightIds(currentSelection());
 			});
+			item.addEventListener("contextmenu", (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				selectForClipboard(item.dataset.objectId, true);
+				openClipboardMenu(e.clientX, e.clientY);
+			});
 		});
 		body.addEventListener("mouseover", (e) => {
 			const el = hoverTarget(e.target);
@@ -2581,6 +2707,13 @@ frappe.provide("pdffiller.print_designer");
 			if (type) addField(type, x, y);
 		});
 		overlay.addEventListener("mousedown", onOverlayMouseDown);
+		overlay.addEventListener("contextmenu", (e) => {
+			if (e.target.closest("button, input, select, textarea, .ppd-float-toolbar")) return;
+			e.preventDefault();
+			const elNode = e.target.closest("[data-element-id]");
+			if (elNode) selectForClipboard(elNode.dataset.elementId, false);
+			openClipboardMenu(e.clientX, e.clientY);
+		});
 		overlay.addEventListener("click", (e) => {
 			if (e.target !== overlay) return;
 			if (justDropped) return;
@@ -2599,6 +2732,8 @@ frappe.provide("pdffiller.print_designer");
 		if (!panel) return;
 		panel.querySelector(".pfd-group-btn")?.addEventListener("click", groupSelection);
 		panel.querySelector(".pfd-ungroup-btn")?.addEventListener("click", ungroupSelection);
+		panel.querySelector(".pfd-copy-btn")?.addEventListener("click", copySelection);
+		panel.querySelector(".pfd-paste-btn")?.addEventListener("click", pasteClipboard);
 		bindTextStyleEvents(panel, updateSelected);
 		panel.querySelector(".ppd-prop-text")?.addEventListener("input", (e) => {
 			updateSelected({ text: e.target.value }, { refreshCanvas: true });
@@ -2931,6 +3066,16 @@ frappe.provide("pdffiller.print_designer");
 			e.preventDefault();
 			if (e.shiftKey) ungroupSelection();
 			else groupSelection();
+			return;
+		}
+		if (modifier && key === "c") {
+			e.preventDefault();
+			copySelection();
+			return;
+		}
+		if (modifier && key === "v") {
+			e.preventDefault();
+			pasteClipboard();
 			return;
 		}
 		if (e.key === "Escape") {

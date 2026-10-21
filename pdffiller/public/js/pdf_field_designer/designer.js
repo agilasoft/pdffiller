@@ -213,7 +213,8 @@ frappe.provide("pdffiller.designer");
 		const ids = currentSelection();
 		const objects = selectedObjects();
 		const grouped = objects.some((field) => multiSelect()?.cleanGroupId(field.group_id));
-		if (ids.length < 2 && !grouped) return "";
+		const canPaste = Boolean(multiSelect()?.hasClipboard());
+		if (!ids.length && !canPaste) return "";
 		const groupBtn =
 			ids.length >= 2
 				? `<button type="button" class="btn btn-default btn-sm pfd-group-btn">${__("Group")}</button>`
@@ -221,9 +222,19 @@ frappe.provide("pdffiller.designer");
 		const ungroupBtn = grouped
 			? `<button type="button" class="btn btn-default btn-sm pfd-ungroup-btn">${__("Ungroup")}</button>`
 			: "";
+		const copyBtn = ids.length
+			? `<button type="button" class="btn btn-default btn-sm pfd-copy-btn">${__("Copy")}</button>`
+			: "";
+		const pasteBtn = `<button type="button" class="btn btn-default btn-sm pfd-paste-btn" ${
+			canPaste ? "" : "disabled"
+		}>${__("Paste")}</button>`;
+		const title =
+			ids.length > 1 || grouped
+				? `<div class="pfd-panel-title">${__("{0} selected", [String(ids.length)])}</div>`
+				: "";
 		return `<div class="pfd-prop-section pfd-multi-bar">
-			<div class="pfd-panel-title">${__("{0} selected", [String(ids.length)])}</div>
-			<div class="pfd-multi-actions">${groupBtn}${ungroupBtn}</div>
+			${title}
+			<div class="pfd-multi-actions">${copyBtn}${pasteBtn}${groupBtn}${ungroupBtn}</div>
 		</div>`;
 	}
 
@@ -279,6 +290,126 @@ frappe.provide("pdffiller.designer");
 		markDirty();
 		renderCanvasContainer();
 		renderPropertiesPanel();
+	}
+
+	function copySelection() {
+		const api = multiSelect();
+		const objects = selectedObjects();
+		if (!api || !objects.length) {
+			frappe.show_alert({ message: __("Select an object to copy"), indicator: "orange" });
+			return;
+		}
+		api.writeClipboard({
+			source: {
+				editor: "field",
+				document: state.templateName || "",
+				reference_doctype: state.reference_doctype || "",
+				page: state.currentPage,
+			},
+			objects: objects.map((field) => ({ ...field, kind: "field" })),
+		});
+		frappe.show_alert({
+			message: __("Copied {0} object(s)", [String(objects.length)]),
+			indicator: "green",
+		});
+		renderPropertiesPanel();
+	}
+
+	function pasteClipboard() {
+		const api = multiSelect();
+		const clip = api && api.readClipboard();
+		const page = getCurrentPage();
+		if (!api || !clip || !page) {
+			frappe.show_alert({ message: __("Nothing to paste"), indicator: "orange" });
+			return;
+		}
+		const source = clip.source || {};
+		const prepared = api.preparePaste(clip, {
+			editor: "field",
+			pageIndex: state.currentPage,
+			pageWidth: page.width_pt,
+			pageHeight: page.height_pt,
+			obstacles: getPageFields(state.currentPage),
+			existingNames: state.fields.map((field) => field.field_name),
+			referenceFields: state.reference_fields,
+			childTables: state.child_tables,
+			sameDocument: source.editor === "field" && source.document === state.templateName,
+			samePage: source.editor === "field" && source.document === state.templateName && source.page === state.currentPage,
+		});
+		if (!prepared.objects.length) {
+			frappe.show_alert({
+				message: __("Those objects cannot be pasted as form fields"),
+				indicator: "orange",
+			});
+			return;
+		}
+		pushUndo("paste");
+		const ids = [];
+		prepared.objects.forEach((obj) => {
+			const field = normalizeLoadedField({ ...obj, id: nextFieldId(), page: state.currentPage });
+			delete field.kind;
+			state.fields.push(field);
+			ids.push(field.id);
+		});
+		commitSelection(ids, ids[ids.length - 1]);
+		state.selectionAnchor = ids[0] || null;
+		markDirty();
+		render();
+		reportPaste(prepared);
+	}
+
+	function reportPaste(prepared) {
+		if (prepared.cleared.length) {
+			frappe.show_alert({
+				message: __(
+					"Pasted {0} object(s). Cleared mappings that are not on this document: {1}",
+					[String(prepared.objects.length), prepared.cleared.join(", ")]
+				),
+				indicator: "orange",
+			});
+		} else {
+			frappe.show_alert({
+				message: __("Pasted {0} object(s)", [String(prepared.objects.length)]),
+				indicator: "green",
+			});
+		}
+		if (prepared.skipped) {
+			frappe.show_alert({
+				message: __("{0} object(s) were skipped because this page only accepts fields", [
+					String(prepared.skipped),
+				]),
+				indicator: "orange",
+			});
+		}
+	}
+
+	function openClipboardMenu(x, y) {
+		const api = multiSelect();
+		if (!api) return;
+		api.openContextMenu(x, y, [
+			{
+				action: "copy",
+				label: __("Copy"),
+				shortcut: "Ctrl+C",
+				disabled: !currentSelection().length,
+				onSelect: copySelection,
+			},
+			{
+				action: "paste",
+				label: __("Paste"),
+				shortcut: "Ctrl+V",
+				disabled: !api.hasClipboard(),
+				onSelect: pasteClipboard,
+			},
+		]);
+	}
+
+	function selectForClipboard(id, fromLayout) {
+		if (!id || currentSelection().includes(id)) return;
+		selectWithPointer(id, { ctrlKey: false, metaKey: false, shiftKey: false }, fromLayout);
+		renderCanvasContainer();
+		renderPropertiesPanel();
+		highlightIds(currentSelection());
 	}
 
 	function getScale() {
@@ -1489,7 +1620,9 @@ frappe.provide("pdffiller.designer");
 	function renderProperties() {
 		const field = getSelectedField();
 		if (!field) {
-			return `<div class="pfd-empty-props">${__("Select a field to edit layout and mapping")}</div>`;
+			return `${renderSelectionActions()}<div class="pfd-empty-props">${__(
+				"Select a field to edit layout and mapping"
+			)}</div>`;
 		}
 
 		const showFont = !["Check", "Select", "Barcode", "QR Code", "Image", "Signature"].includes(
@@ -1915,6 +2048,12 @@ frappe.provide("pdffiller.designer");
 				renderPropertiesPanel();
 				highlightIds(currentSelection());
 			});
+			item.addEventListener("contextmenu", (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				selectForClipboard(item.dataset.objectId, true);
+				openClipboardMenu(e.clientX, e.clientY);
+			});
 		});
 		body.addEventListener("mouseover", (e) => {
 			const el = hoverTarget(e.target);
@@ -2039,6 +2178,13 @@ frappe.provide("pdffiller.designer");
 		});
 
 		overlay.addEventListener("mousedown", onOverlayMouseDown);
+		overlay.addEventListener("contextmenu", (e) => {
+			if (e.target.closest("button, input, select, textarea")) return;
+			e.preventDefault();
+			const fieldEl = e.target.closest(".pfd-field-overlay");
+			if (fieldEl) selectForClipboard(fieldEl.dataset.fieldId, false);
+			openClipboardMenu(e.clientX, e.clientY);
+		});
 		overlay.addEventListener("click", (e) => {
 			if (skipOverlayClick) {
 				skipOverlayClick = false;
@@ -2151,6 +2297,8 @@ frappe.provide("pdffiller.designer");
 		panel.querySelector(".pfd-delete-field")?.addEventListener("click", deleteSelectedField);
 		panel.querySelector(".pfd-group-btn")?.addEventListener("click", groupSelection);
 		panel.querySelector(".pfd-ungroup-btn")?.addEventListener("click", ungroupSelection);
+		panel.querySelector(".pfd-copy-btn")?.addEventListener("click", copySelection);
+		panel.querySelector(".pfd-paste-btn")?.addEventListener("click", pasteClipboard);
 	}
 
 	function startMarquee(overlay, e) {
@@ -2330,6 +2478,16 @@ frappe.provide("pdffiller.designer");
 			e.preventDefault();
 			if (e.shiftKey) ungroupSelection();
 			else groupSelection();
+			return;
+		}
+		if (modifier && key === "c") {
+			e.preventDefault();
+			copySelection();
+			return;
+		}
+		if (modifier && key === "v") {
+			e.preventDefault();
+			pasteClipboard();
 			return;
 		}
 		if (!currentSelection().length) return;

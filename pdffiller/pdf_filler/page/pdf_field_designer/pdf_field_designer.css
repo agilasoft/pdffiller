@@ -767,5 +767,47 @@ button.pfd-layout-item {
 
 .pfd-multi-actions {
 	display: flex;
+	flex-wrap: wrap;
 	gap: 8px;
+}
+
+.pfd-context-menu {
+	position: fixed;
+	z-index: 1050;
+	min-width: 180px;
+	padding: 4px;
+	background: var(--fg-color, #fff);
+	border: 1px solid var(--border-color, #d1d8dd);
+	border-radius: 8px;
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.pfd-context-menu button {
+	display: flex;
+	align-items: center;
+	width: 100%;
+	padding: 6px 10px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--text-color, #1f272e);
+	font-size: 13px;
+	text-align: left;
+}
+
+.pfd-context-menu button kbd {
+	margin-left: auto;
+	padding-left: 16px;
+	color: var(--text-muted, #7c8794);
+	font-family: inherit;
+	font-size: 11px;
+}
+
+.pfd-context-menu button:hover:not(:disabled) {
+	background: var(--fg-hover-color, #f4f5f6);
+}
+
+.pfd-context-menu button:disabled {
+	opacity: 0.45;
+	cursor: default;
 }
