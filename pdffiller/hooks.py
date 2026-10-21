@@ -9,9 +9,11 @@ app_include_js = [
 	"/assets/pdffiller/js/pdf_viewer_dialog.js",
 	"/assets/pdffiller/js/pdf_form_buttons.js",
 	"/assets/pdffiller/js/pdf_form_transfer.js",
+	"/assets/pdffiller/js/workdesk_layout.js",
 ]
 app_include_css = [
 	"/assets/pdffiller/css/pdf_viewer_dialog.css",
+	"/assets/pdffiller/css/workdesk_layout.css",
 ]
 
 fixtures = [
