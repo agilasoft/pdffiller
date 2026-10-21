@@ -16,6 +16,13 @@
   "display_depends_on",
   "section_break_pdf",
   "pdf_file",
+  "fields_only",
+  "always_print_last",
+  "flatten",
+  "skip_draft_watermark",
+  "page_roles",
+  "section_break_access",
+  "allowed_roles",
   "section_break_mappings",
   "field_mappings"
  ],
@@ -79,6 +86,53 @@
    "fieldtype": "Attach",
    "label": "PDF File",
    "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "fields_only",
+   "fieldtype": "Check",
+   "label": "Fields only (no background)",
+   "description": "When enabled, print and download omit the PDF template background by default"
+  },
+  {
+   "default": "0",
+   "fieldname": "always_print_last",
+   "fieldtype": "Check",
+   "label": "Always Print Last Page",
+   "description": "When a Last page is designed, always include it — even if all line items fit on the First page."
+  },
+  {
+   "default": "1",
+   "fieldname": "flatten",
+   "fieldtype": "Check",
+   "label": "Flatten PDF",
+   "description": "Burn filled values into the page so the downloaded file is no longer an editable form"
+  },
+  {
+   "default": "0",
+   "fieldname": "skip_draft_watermark",
+   "fieldtype": "Check",
+   "label": "Skip Draft Watermark",
+   "description": "When unchecked, draft documents of a submittable DocType are stamped DRAFT"
+  },
+  {
+   "fieldname": "section_break_access",
+   "fieldtype": "Section Break",
+   "label": "Access",
+   "description": "Leave empty to show this form to anyone who can read the document."
+  },
+  {
+   "fieldname": "allowed_roles",
+   "fieldtype": "Table",
+   "label": "Allowed Roles",
+   "options": "PDF Form Allowed Role"
+  },
+  {
+   "fieldname": "page_roles",
+   "fieldtype": "JSON",
+   "hidden": 1,
+   "label": "Page Roles",
+   "description": "Designer metadata: page index to First, Loop, Last, or Once"
   },
   {
    "fieldname": "section_break_mappings",

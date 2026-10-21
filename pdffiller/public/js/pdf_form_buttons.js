@@ -5,13 +5,30 @@ frappe.provide("pdffiller.forms");
 (function () {
 	"use strict";
 
-	const SKIP_DOCTYPES = new Set(["PDF Form Template", "PDF Form Field Mapping"]);
+	const SKIP_DOCTYPES = new Set([
+		"PDF Form Template",
+		"PDF Form Field Mapping",
+		"PDF Print Design",
+		"PDF Form Packet",
+		"PDF Form Packet Item",
+		"PDF Form Generation Log",
+		"PDF Form Allowed Role",
+		"PDF Filler AI Settings",
+		"PDF Filler AI Allowed Role",
+	]);
 	const cache = {};
+
+	function doctype_may_have_forms(doctype) {
+		const known = frappe.boot && frappe.boot.pdffiller_reference_doctypes;
+		if (!Array.isArray(known)) return true;
+		return known.indexOf(doctype) !== -1;
+	}
 
 	function should_skip_form(frm) {
 		if (!frm || !frm.doc || !frm.doctype) return true;
 		if (frm.is_new() || !frm.doc.name) return true;
 		if (SKIP_DOCTYPES.has(frm.doctype)) return true;
+		if (!doctype_may_have_forms(frm.doctype)) return true;
 		if (frm.meta && (frm.meta.issingle || frm.meta.istable)) return true;
 		return false;
 	}
@@ -54,7 +71,7 @@ frappe.provide("pdffiller.forms");
 
 	function open_template(frm, template) {
 		return function () {
-			pdffiller.viewer.open(frm, template.name, template.title);
+			pdffiller.viewer.open(frm, template.name, template.title, template.source);
 		};
 	}
 
@@ -150,6 +167,109 @@ frappe.provide("pdffiller.forms");
 			add_buttons(frm, templates);
 		});
 	};
+
+	function download_file(data_uri, filename) {
+		const link = document.createElement("a");
+		link.href = data_uri;
+		link.download = filename || "forms.pdf";
+		document.body.appendChild(link);
+		link.click();
+		document.body.removeChild(link);
+	}
+
+	function bulk_generate(listview, template) {
+		const names = (listview.get_checked_items() || []).map(function (row) {
+			return row.name;
+		});
+		if (!names.length) {
+			frappe.msgprint(__("Select at least one document."));
+			return;
+		}
+		const dialog = new frappe.ui.Dialog({
+			title: template.title,
+			fields: [
+				{
+					fieldtype: "Select",
+					fieldname: "output",
+					label: __("Download as"),
+					options: ["Merged PDF", "Zip of PDFs"].join("\n"),
+					default: "Merged PDF",
+				},
+			],
+			primary_action_label: __("Download"),
+			primary_action(values) {
+				dialog.hide();
+				frappe.call({
+					method: "pdffiller.api.forms.bulk_generate",
+					args: {
+						reference_doctype: listview.doctype,
+						names: JSON.stringify(names),
+						template: template.name,
+						source: template.source,
+						output: values.output === "Zip of PDFs" ? "zip" : "merged",
+					},
+					freeze: true,
+					callback(r) {
+						if (!r.message || !r.message.data_uri) return;
+						if (r.message.warnings && r.message.warnings.length) {
+							frappe.msgprint({
+								title: __("Some values could not be filled"),
+								indicator: "orange",
+								message: r.message.warnings
+									.map(function (warning) {
+										return frappe.utils.escape_html(
+											`${warning.field || ""}: ${warning.message || ""}`
+										);
+									})
+									.join("<br>"),
+							});
+						}
+						download_file(r.message.data_uri, r.message.filename);
+					},
+				});
+			},
+		});
+		dialog.show();
+	}
+
+	pdffiller.forms.add_list_actions = function (listview) {
+		if (!listview || !listview.doctype || !listview.page) return;
+		if (SKIP_DOCTYPES.has(listview.doctype)) return;
+		if (listview.pdffiller_bulk_ready) return;
+		if (!doctype_may_have_forms(listview.doctype)) return;
+		listview.pdffiller_bulk_ready = true;
+
+		frappe.call({
+			method: "pdffiller.api.forms.get_templates",
+			args: { reference_doctype: listview.doctype },
+			callback(r) {
+				const templates = r.message || [];
+				if (!templates.length) return;
+				templates.forEach(function (template) {
+					listview.page.add_inner_button(template.title, function () {
+						bulk_generate(listview, template);
+					}, __("PDF Forms"));
+				});
+			},
+		});
+	};
+
+	function install_list_hook() {
+		if (!frappe.views || !frappe.views.ListView) return;
+		if (frappe.views.ListView.prototype.__pdffiller_hooked) return;
+		const original = frappe.views.ListView.prototype.refresh;
+		frappe.views.ListView.prototype.refresh = function () {
+			const result = original.apply(this, arguments);
+			const listview = this;
+			Promise.resolve(result).then(function () {
+				pdffiller.forms.add_list_actions(listview);
+			});
+			return result;
+		};
+		frappe.views.ListView.prototype.__pdffiller_hooked = true;
+	}
+
+	install_list_hook();
 
 	frappe.ui.form.on("*", {
 		refresh(frm) {

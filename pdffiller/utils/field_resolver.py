@@ -13,11 +13,23 @@ from frappe.utils import cstr, flt, formatdate, getdate
 JINJA_MARKERS = re.compile(r"(\{\{|\{%)")
 
 
-def get_jinja_context(source_doc) -> dict[str, Any]:
-	return {
+class _JinjaFrappeProxy:
+	"""Jinja `frappe` helper: utils (fmt_money, formatdate) plus app APIs (db, get_doc)."""
+
+	def __getattr__(self, name: str):
+		if hasattr(frappe.utils, name):
+			return getattr(frappe.utils, name)
+		return getattr(frappe, name)
+
+
+def get_jinja_context(source_doc, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+	context = {
 		"doc": source_doc,
-		"frappe": frappe.utils,
+		"frappe": _JinjaFrappeProxy(),
 	}
+	if extra:
+		context.update(extra)
+	return context
 
 
 def is_jinja_template(value: str) -> bool:
@@ -36,30 +48,65 @@ def get_source_type(mapping_row) -> str:
 	return "Field Path"
 
 
-def render_jinja_template(template: str, source_doc) -> str:
+def render_jinja_template(
+	template: str,
+	source_doc,
+	extra: dict[str, Any] | None = None,
+	field_name: str = "",
+) -> str:
 	template = (template or "").strip()
 	if not template:
 		return ""
 
 	try:
-		return cstr(frappe.render_template(template, get_jinja_context(source_doc))).strip()
-	except Exception:
-		frappe.log_error(
-			title="PDF Form Template Jinja Error",
-			message=frappe.get_traceback(),
-		)
+		return cstr(frappe.render_template(template, get_jinja_context(source_doc, extra))).strip()
+	except Exception as exc:
+		try:
+			frappe.log_error(
+				title="PDF Form Template Jinja Error",
+				message=frappe.get_traceback(),
+			)
+		except Exception:
+			pass
+		from pdffiller.utils.fill_warnings import add_warning
+
+		detail = cstr(exc).splitlines()[0][:240] if cstr(exc) else "Jinja template failed"
+		add_warning(field_name, detail)
 		return ""
 
 
-def resolve_mapping_value(source_doc, mapping_row) -> str:
+def resolve_mapping_value(source_doc, mapping_row, extra: dict[str, Any] | None = None) -> str:
+	from pdffiller.utils.page_planner import SYSTEM_SOURCE_FIELDS, mapping_get
+
 	value = ""
 	raw_dates = bool(mapping_row.date_format)
 	source_type = get_source_type(mapping_row)
+	extra = extra or {}
+	child_row = extra.get("row")
+
+	field_name = cstr(mapping_get(mapping_row, "pdf_field_name") or "")
+	source_field = (mapping_get(mapping_row, "source_field") or "").strip()
+	repeat_field = (mapping_get(mapping_row, "repeat_field") or "").strip()
+	system_name = source_field if source_field in SYSTEM_SOURCE_FIELDS else ""
+	if not system_name and repeat_field in SYSTEM_SOURCE_FIELDS:
+		system_name = repeat_field
+	if system_name and "page_n" in extra:
+		from pdffiller.utils.page_planner import OutputPage, system_field_value
+
+		page = extra.get("output_page")
+		if isinstance(page, OutputPage):
+			return system_field_value(system_name, page)
+		return cstr(extra.get(system_name) or "")
 
 	if source_type == "Jinja Script":
-		value = render_jinja_template(mapping_row.jinja_script, source_doc)
+		value = render_jinja_template(mapping_row.jinja_script, source_doc, extra, field_name=field_name)
 	elif source_type == "Jinja Template":
-		value = render_jinja_template(mapping_row.source_field, source_doc)
+		value = render_jinja_template(mapping_row.source_field, source_doc, extra, field_name=field_name)
+	elif mapping_get(mapping_row, "repeat_table"):
+		target = child_row
+		fieldname = repeat_field or source_field
+		if target is not None and fieldname:
+			value = resolve_field_path(target, fieldname, raw_dates=raw_dates)
 	elif mapping_row.source_field:
 		value = resolve_field_path(source_doc, mapping_row.source_field, raw_dates=raw_dates)
 
@@ -101,7 +148,8 @@ def format_doc_value(doc, fieldname: str, value: Any, raw_dates: bool = False) -
 	if value in (None, ""):
 		return ""
 
-	field = doc.meta.get_field(fieldname)
+	meta = getattr(doc, "meta", None)
+	field = meta.get_field(fieldname) if meta else None
 	if not field:
 		return cstr(value)
 

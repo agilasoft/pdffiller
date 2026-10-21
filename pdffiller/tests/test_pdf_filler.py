@@ -4,11 +4,29 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 import fitz
 
-from pdffiller.utils.pdf_filler import build_field_preview, build_form_data, fill_pdf, list_acroform_fields, template_has_widgets
+from pdffiller.utils.pdf_filler import (
+	build_field_preview,
+	build_form_data,
+	fill_pdf,
+	fill_pdf_fields_only,
+	list_acroform_fields,
+	template_has_widgets,
+)
+from pdffiller.utils.pdf_designer import apply_field_layout
+
+
+def _span_containing(page, text: str):
+	for block in page.get_text("dict").get("blocks", []):
+		for line in block.get("lines", []):
+			for span in line.get("spans", []):
+				if text in (span.get("text") or ""):
+					return span
+	return None
 
 
 def _make_fillable_pdf(path: str, fields: dict[str, str]) -> None:
@@ -61,6 +79,81 @@ class TestPdfFiller(unittest.TestCase):
 		output.close()
 		self.assertTrue(flags.get("FieldA"))
 		self.assertFalse(flags.get("FieldB"))
+
+	def test_fill_pdf_fields_only_omits_background(self):
+		template_doc = fitz.open(self.template_path)
+		template_page = template_doc[0]
+		template_page.insert_text((72, 50), "Background Label", fontsize=12)
+		with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+			background_path = tmp.name
+		template_doc.save(background_path)
+		template_doc.close()
+
+		pdf_bytes = fill_pdf_fields_only(background_path, {"FieldA": "Hello", "FieldB": "World"})
+		output = fitz.open(stream=pdf_bytes, filetype="pdf")
+		try:
+			self.assertEqual(len(output), 1)
+			page_text = output[0].get_text()
+			self.assertIn("Hello", page_text)
+			self.assertIn("World", page_text)
+			self.assertNotIn("Background Label", page_text)
+			self.assertEqual(list(output[0].widgets() or []), [])
+		finally:
+			output.close()
+			os.unlink(background_path)
+
+	def test_fill_pdf_fields_only_uses_text_style(self):
+		doc = fitz.open()
+		doc.new_page(width=595, height=842)
+		plain = os.path.join(self.tempdir, "plain.pdf")
+		doc.save(plain)
+		doc.close()
+		pdf_bytes = apply_field_layout(
+			plain,
+			[
+				{
+					"field_name": "heading",
+					"field_type": "Data",
+					"page": 0,
+					"x": 40,
+					"y": 80,
+					"width": 400,
+					"height": 28,
+					"font_size": 16,
+					"font_family": "Helvetica",
+					"bold": 1,
+					"italic": 0,
+					"color": "#cc0000",
+					"align": "center",
+					"word_wrap": 0,
+				}
+			],
+		)
+		styled = os.path.join(self.tempdir, "styled.pdf")
+		with open(styled, "wb") as handle:
+			handle.write(pdf_bytes)
+
+		filled = fill_pdf_fields_only(styled, {"heading": "Hi"})
+		output = fitz.open(stream=filled, filetype="pdf")
+		try:
+			span = _span_containing(output[0], "Hi")
+			self.assertIsNotNone(span)
+			self.assertIn("Bold", span["font"])
+			self.assertGreater(span["color"] >> 16, 150)
+			self.assertGreater(span["bbox"][0], 80)
+		finally:
+			output.close()
+
+		legacy = os.path.join(self.tempdir, "legacy.pdf")
+		_make_fillable_pdf(legacy, {"Short": ""})
+		legacy_filled = fill_pdf_fields_only(legacy, {"Short": "Hello"})
+		legacy_doc = fitz.open(stream=legacy_filled, filetype="pdf")
+		try:
+			legacy_span = _span_containing(legacy_doc[0], "Hello")
+			self.assertIsNotNone(legacy_span)
+			self.assertGreater(legacy_span["bbox"][0], 100)
+		finally:
+			legacy_doc.close()
 
 	def test_build_form_data_with_overrides(self):
 		template_doc = SimpleNamespace(
@@ -116,6 +209,224 @@ class TestPdfFiller(unittest.TestCase):
 		self.assertEqual(preview[0]["pdf_field_name"], "FieldA")
 		self.assertEqual(preview[0]["value"], "DOC-001")
 		self.assertTrue(preview[0]["editable"])
+
+	def test_fill_pdf_renders_barcode_image(self):
+		fields = [
+			{
+				"field_name": "item_barcode",
+				"field_type": "Barcode",
+				"page": 0,
+				"x": 72,
+				"y": 72,
+				"width": 180,
+				"height": 48,
+				"font_size": 10,
+			}
+		]
+		pdf_bytes = apply_field_layout(self.template_path, fields)
+		output_path = os.path.join(self.tempdir, "barcode.pdf")
+		with open(output_path, "wb") as handle:
+			handle.write(pdf_bytes)
+
+		filled = fill_pdf(output_path, {"item_barcode": "ITEM-001"}, barcode_fields={"item_barcode"})
+		doc = fitz.open(stream=filled, filetype="pdf")
+		try:
+			self.assertGreater(len(doc[0].get_images()), 0)
+			widget = next(doc[0].widgets())
+			self.assertEqual(widget.field_value, "")
+		finally:
+			doc.close()
+
+	def test_fill_pdf_fields_only_renders_barcode_image(self):
+		fields = [
+			{
+				"field_name": "item_barcode",
+				"field_type": "Barcode",
+				"page": 0,
+				"x": 72,
+				"y": 72,
+				"width": 180,
+				"height": 48,
+				"font_size": 10,
+			}
+		]
+		pdf_bytes = apply_field_layout(self.template_path, fields)
+		output_path = os.path.join(self.tempdir, "barcode_fields_only.pdf")
+		with open(output_path, "wb") as handle:
+			handle.write(pdf_bytes)
+
+		filled = fill_pdf_fields_only(output_path, {"item_barcode": "ITEM-001"}, barcode_fields={"item_barcode"})
+		doc = fitz.open(stream=filled, filetype="pdf")
+		try:
+			self.assertGreater(len(doc[0].get_images()), 0)
+			self.assertEqual(list(doc[0].widgets() or []), [])
+		finally:
+			doc.close()
+
+	def test_fill_template_pdf_uses_barcode_field_type(self):
+		from pdffiller.utils.pdf_filler import fill_template_pdf
+
+		fields = [
+			{
+				"field_name": "item_barcode",
+				"field_type": "Barcode",
+				"page": 0,
+				"x": 72,
+				"y": 72,
+				"width": 180,
+				"height": 48,
+				"font_size": 10,
+			}
+		]
+		pdf_bytes = apply_field_layout(self.template_path, fields)
+		template_path = os.path.join(self.tempdir, "barcode_template.pdf")
+		with open(template_path, "wb") as handle:
+			handle.write(pdf_bytes)
+
+		template_doc = SimpleNamespace(
+			pdf_file="/files/barcode_template.pdf",
+			field_mappings=[
+				SimpleNamespace(
+					pdf_field_name="item_barcode",
+					field_type="Barcode",
+					source_type="Field Path",
+					source_field="name",
+					jinja_script="",
+					default_value="",
+					date_format="",
+					editable=0,
+				)
+			],
+		)
+		source_doc = SimpleNamespace(
+			meta=SimpleNamespace(get_field=lambda _f: SimpleNamespace(fieldtype="Barcode")),
+			name="ITEM-001",
+		)
+
+		with unittest.mock.patch("pdffiller.utils.pdf_filler.get_pdf_path", return_value=template_path):
+			filled = fill_template_pdf(template_doc, source_doc, fields_only=True)
+
+		doc = fitz.open(stream=filled, filetype="pdf")
+		try:
+			self.assertGreater(len(doc[0].get_images()), 0)
+		finally:
+			doc.close()
+
+	def _tiny_png_path(self) -> str:
+		import base64
+
+		png = base64.b64decode(
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+		)
+		path = os.path.join(self.tempdir, "tiny.png")
+		with open(path, "wb") as handle:
+			handle.write(png)
+		return path
+
+	def test_fill_pdf_renders_image_field(self):
+		fields = [
+			{
+				"field_name": "photo",
+				"field_type": "Image",
+				"page": 0,
+				"x": 72,
+				"y": 72,
+				"width": 120,
+				"height": 120,
+				"font_size": 10,
+			}
+		]
+		pdf_bytes = apply_field_layout(self.template_path, fields)
+		output_path = os.path.join(self.tempdir, "image.pdf")
+		with open(output_path, "wb") as handle:
+			handle.write(pdf_bytes)
+
+		image_path = self._tiny_png_path()
+		filled = fill_pdf(output_path, {"photo": image_path}, image_fields={"photo"})
+		doc = fitz.open(stream=filled, filetype="pdf")
+		try:
+			self.assertGreater(len(doc[0].get_images()), 0)
+			widget = next(doc[0].widgets())
+			self.assertEqual(widget.field_value, "")
+		finally:
+			doc.close()
+
+	def test_fill_pdf_fields_only_renders_image_field(self):
+		fields = [
+			{
+				"field_name": "photo",
+				"field_type": "Image",
+				"page": 0,
+				"x": 72,
+				"y": 72,
+				"width": 120,
+				"height": 120,
+				"font_size": 10,
+			}
+		]
+		pdf_bytes = apply_field_layout(self.template_path, fields)
+		output_path = os.path.join(self.tempdir, "image_fields_only.pdf")
+		with open(output_path, "wb") as handle:
+			handle.write(pdf_bytes)
+
+		image_path = self._tiny_png_path()
+		filled = fill_pdf_fields_only(output_path, {"photo": image_path}, image_fields={"photo"})
+		doc = fitz.open(stream=filled, filetype="pdf")
+		try:
+			self.assertGreater(len(doc[0].get_images()), 0)
+			self.assertEqual(list(doc[0].widgets() or []), [])
+		finally:
+			doc.close()
+
+	def test_fill_template_pdf_uses_image_field_type(self):
+		from pdffiller.utils.pdf_filler import fill_template_pdf
+
+		fields = [
+			{
+				"field_name": "photo",
+				"field_type": "Image",
+				"page": 0,
+				"x": 72,
+				"y": 72,
+				"width": 120,
+				"height": 120,
+				"font_size": 10,
+			}
+		]
+		pdf_bytes = apply_field_layout(self.template_path, fields)
+		template_path = os.path.join(self.tempdir, "image_template.pdf")
+		with open(template_path, "wb") as handle:
+			handle.write(pdf_bytes)
+
+		image_path = self._tiny_png_path()
+		template_doc = SimpleNamespace(
+			pdf_file="/files/image_template.pdf",
+			field_mappings=[
+				SimpleNamespace(
+					pdf_field_name="photo",
+					field_type="Image",
+					source_type="Field Path",
+					source_field="image",
+					jinja_script="",
+					default_value="",
+					date_format="",
+					editable=0,
+				)
+			],
+		)
+		source_doc = SimpleNamespace(
+			meta=SimpleNamespace(get_field=lambda _f: SimpleNamespace(fieldtype="Attach Image")),
+			image=image_path,
+		)
+
+		with unittest.mock.patch("pdffiller.utils.pdf_filler.get_pdf_path", return_value=template_path):
+			filled = fill_template_pdf(template_doc, source_doc, fields_only=True)
+
+		doc = fitz.open(stream=filled, filetype="pdf")
+		try:
+			self.assertGreater(len(doc[0].get_images()), 0)
+		finally:
+			doc.close()
 
 
 if __name__ == "__main__":
