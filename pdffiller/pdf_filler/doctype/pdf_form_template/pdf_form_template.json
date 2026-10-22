@@ -106,7 +106,7 @@
    "fieldname": "flatten",
    "fieldtype": "Check",
    "label": "Flatten PDF",
-   "description": "Burn filled values into the page so the downloaded file is no longer an editable form"
+   "description": "Burn filled values into the page. Fields marked Editable stay fillable in the print review and in the file."
   },
   {
    "default": "0",

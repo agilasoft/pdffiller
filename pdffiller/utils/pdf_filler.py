@@ -66,6 +66,24 @@ def _set_widget_value(widget, value: str) -> None:
 		widget.field_value = value or ""
 
 
+def _commit_widget_flags(doc, widget, readonly: bool, *, update: bool = True) -> None:
+	"""Persist the ReadOnly bit. ``widget.update()`` can put it back when flags are 0."""
+	import fitz
+
+	flags = int(widget.field_flags or 0)
+	mask = int(fitz.PDF_FIELD_IS_READ_ONLY)
+	if readonly:
+		flags |= mask
+	else:
+		flags &= ~mask
+	widget.field_flags = flags
+	if update:
+		widget.update()
+	xref = int(getattr(widget, "xref", 0) or 0)
+	if doc is not None and xref:
+		doc.xref_set_key(xref, "Ff", str(flags))
+
+
 def _widget_matches_radio(widget, field_name: str, export_value: str) -> bool:
 	if widget.field_name != field_name:
 		return False
@@ -694,12 +712,16 @@ def fill_pdf(
 						export_value = (value or "").strip()
 						selected = None
 						for widget in radio_widgets:
-							widget.field_flags = widget.field_flags | fitz.PDF_FIELD_IS_READ_ONLY
+							_commit_widget_flags(doc, widget, True, update=False)
 							if _widget_matches_radio(widget, field_name, export_value):
 								selected = widget
 						if selected:
 							selected.field_value = export_value
 							selected.update()
+							_commit_widget_flags(doc, selected, True, update=False)
+					else:
+						for widget in radio_widgets:
+							_commit_widget_flags(doc, widget, False, update=False)
 					radio_done.add(field_name)
 					continue
 
@@ -719,9 +741,7 @@ def fill_pdf(
 					)
 				else:
 					_set_widget_value(widget, value)
-				if field_name in readonly_fields:
-					widget.field_flags = widget.field_flags | fitz.PDF_FIELD_IS_READ_ONLY
-				widget.update()
+				_commit_widget_flags(doc, widget, field_name in readonly_fields)
 		# Skip garbage=4: it takes seconds on BIR face PDFs and barely shrinks them.
 		return doc.tobytes()
 	finally:

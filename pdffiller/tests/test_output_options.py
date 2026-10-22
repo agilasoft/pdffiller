@@ -5,6 +5,8 @@ import unittest
 from types import SimpleNamespace
 
 from pdffiller.utils.output_options import (
+	apply_output_options,
+	editable_field_names,
 	flatten_pdf,
 	merge_pdfs,
 	should_stamp_draft,
@@ -39,6 +41,36 @@ def _widget_pdf() -> bytes:
 	return data
 
 
+def _locked_and_open_pdf() -> bytes:
+	import fitz
+
+	doc = fitz.open()
+	page = doc.new_page()
+	locked = fitz.Widget()
+	locked.field_name = "Locked"
+	locked.field_type = fitz.PDF_WIDGET_TYPE_TEXT
+	locked.rect = fitz.Rect(72, 72, 280, 96)
+	locked.field_value = "KEEP TEXT"
+	locked.text_fontsize = 12
+	page.add_widget(locked)
+
+	opened = fitz.Widget()
+	opened.field_name = "Open"
+	opened.field_type = fitz.PDF_WIDGET_TYPE_TEXT
+	opened.rect = fitz.Rect(72, 120, 280, 148)
+	opened.field_value = "EDIT ME"
+	opened.text_fontsize = 12
+	opened.field_flags = fitz.PDF_FIELD_IS_READ_ONLY
+	page.add_widget(opened)
+	stored = next(widget for widget in page.widgets() if widget.field_name == "Open")
+	doc.xref_set_key(stored.xref, "DA", "(0 0 0 rg /HeBo 12 Tf)")
+	doc.xref_set_key(stored.xref, "Q", "1")
+	doc.xref_set_key(stored.xref, "Ff", str(int(fitz.PDF_FIELD_IS_READ_ONLY)))
+	data = doc.tobytes()
+	doc.close()
+	return data
+
+
 class TestOutputOptions(unittest.TestCase):
 	def test_flatten_removes_widgets_and_keeps_text(self):
 		import fitz
@@ -49,6 +81,82 @@ class TestOutputOptions(unittest.TestCase):
 			widgets = list(doc[0].widgets() or [])
 			self.assertEqual(widgets, [])
 			self.assertIn("Ada", doc[0].get_text())
+		finally:
+			doc.close()
+
+	def test_flatten_keeps_editable_widgets_and_burns_the_rest(self):
+		import fitz
+
+		flattened = flatten_pdf(_locked_and_open_pdf(), keep_fields={"Open"})
+		doc = fitz.open(stream=flattened, filetype="pdf")
+		try:
+			widgets = {widget.field_name: widget for widget in doc[0].widgets() or []}
+			self.assertEqual(set(widgets), {"Open"})
+			self.assertEqual(widgets["Open"].field_value, "EDIT ME")
+			self.assertFalse(widgets["Open"].field_flags & fitz.PDF_FIELD_IS_READ_ONLY)
+			self.assertIn("HeBo", doc.xref_get_key(widgets["Open"].xref, "DA")[1])
+			self.assertEqual(doc.xref_get_key(widgets["Open"].xref, "Q")[1], "1")
+			text = doc[0].get_text()
+			self.assertEqual(text.count("KEEP TEXT"), 1)
+			self.assertNotIn("Locked", widgets)
+		finally:
+			doc.close()
+
+	def test_flatten_keeps_loop_page_suffix(self):
+		import fitz
+
+		doc = fitz.open()
+		page = doc.new_page()
+		widget = fitz.Widget()
+		widget.field_name = "Open__p2"
+		widget.field_type = fitz.PDF_WIDGET_TYPE_TEXT
+		widget.rect = fitz.Rect(72, 72, 280, 96)
+		widget.field_value = "ROW"
+		page.add_widget(widget)
+		raw = doc.tobytes()
+		doc.close()
+
+		flattened = flatten_pdf(raw, keep_fields={"Open"})
+		doc = fitz.open(stream=flattened, filetype="pdf")
+		try:
+			widgets = list(doc[0].widgets() or [])
+			self.assertEqual([widget.field_name for widget in widgets], ["Open__p2"])
+			self.assertEqual(widgets[0].field_value, "ROW")
+		finally:
+			doc.close()
+
+	def test_editable_field_names_reads_the_check_flag(self):
+		template = SimpleNamespace(
+			field_mappings=[
+				SimpleNamespace(pdf_field_name="Open", editable=1),
+				SimpleNamespace(pdf_field_name="Also", editable="1"),
+				SimpleNamespace(pdf_field_name="Locked", editable=0),
+				SimpleNamespace(pdf_field_name="", editable=1),
+			]
+		)
+		self.assertEqual(editable_field_names(template), {"Open", "Also"})
+
+	def test_apply_output_options_keeps_editable_fields_under_draft_stamp(self):
+		import fitz
+
+		template = SimpleNamespace(
+			flatten=1,
+			skip_draft_watermark=0,
+			field_mappings=[
+				SimpleNamespace(pdf_field_name="Open", editable=1),
+				SimpleNamespace(pdf_field_name="Locked", editable=0),
+			],
+		)
+		source = SimpleNamespace(meta=SimpleNamespace(is_submittable=1), docstatus=0)
+		result = apply_output_options(_locked_and_open_pdf(), template, source)
+		doc = fitz.open(stream=result, filetype="pdf")
+		try:
+			widgets = {widget.field_name: widget for widget in doc[0].widgets() or []}
+			self.assertEqual(set(widgets), {"Open"})
+			self.assertEqual(widgets["Open"].field_value, "EDIT ME")
+			self.assertFalse(widgets["Open"].field_flags & fitz.PDF_FIELD_IS_READ_ONLY)
+			self.assertIn("KEEP TEXT", doc[0].get_text())
+			self.assertIn("DRAFT", doc[0].get_text())
 		finally:
 			doc.close()
 

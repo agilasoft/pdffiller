@@ -79,6 +79,7 @@
 .pdffiller-form-wrapper {
 	width: 320px;
 	min-width: 280px;
+	flex-shrink: 0;
 	border-right: 1px solid var(--border-color);
 	background: var(--card-bg);
 	overflow: auto;
@@ -175,6 +176,7 @@
 
 .pdffiller-viewer-frame {
 	flex: 1;
+	min-width: 0;
 	min-height: 0;
 	background: #323639;
 	position: relative;

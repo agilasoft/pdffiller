@@ -72,8 +72,14 @@ frappe.provide("pdffiller.viewer");
 		`;
 	}
 
+	function has_editable_fields(fields) {
+		return (fields || []).some(function (field) {
+			return Boolean(field && field.editable);
+		});
+	}
+
 	function render_form_panel(fields) {
-		const editable_count = fields.filter((field) => field.editable).length;
+		const editable_count = (fields || []).filter((field) => field.editable).length;
 		const has_editable = editable_count > 0;
 		const fields_html = fields.map(render_field_input).join("");
 
@@ -130,7 +136,7 @@ frappe.provide("pdffiller.viewer");
 				</div>
 				<div class="pdffiller-warnings-host"></div>
 				<div class="pdffiller-viewer-body">
-					<div class="pdffiller-form-wrapper"></div>
+					<div class="pdffiller-form-wrapper pdffiller-form-wrapper--collapsed"></div>
 					<div class="pdffiller-viewer-frame">
 						<div class="pdffiller-loading text-muted">${__("Generating PDF...")}</div>
 					</div>
@@ -451,7 +457,7 @@ frappe.provide("pdffiller.viewer");
 		$viewer.find(".pdffiller-fields-only-checkbox").prop("checked", state.fields_only);
 		$viewer
 			.find(".pdffiller-form-wrapper")
-			.addClass("pdffiller-form-wrapper--collapsed")
+			.toggleClass("pdffiller-form-wrapper--collapsed", !has_editable_fields(state.fields))
 			.html(render_form_panel(state.fields));
 
 		function reload() {
@@ -540,7 +546,7 @@ frappe.provide("pdffiller.viewer");
 					.prop("checked", state.fields_only);
 				const $form_wrapper = $viewer.find(".pdffiller-form-wrapper");
 				$form_wrapper
-					.addClass("pdffiller-form-wrapper--collapsed")
+					.toggleClass("pdffiller-form-wrapper--collapsed", !has_editable_fields(state.fields))
 					.html(render_form_panel(state.fields));
 				bind_viewer_actions($viewer, state, frm, template_name, form_source);
 				load_filled_pdf($viewer, state, frm, template_name, form_source);

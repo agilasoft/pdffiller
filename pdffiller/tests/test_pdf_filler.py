@@ -80,6 +80,29 @@ class TestPdfFiller(unittest.TestCase):
 		self.assertTrue(flags.get("FieldA"))
 		self.assertFalse(flags.get("FieldB"))
 
+	def test_fill_pdf_clears_readonly_when_field_is_editable(self):
+		doc = fitz.open(self.template_path)
+		for widget in doc[0].widgets() or []:
+			doc.xref_set_key(widget.xref, "Ff", str(int(fitz.PDF_FIELD_IS_READ_ONLY)))
+		locked_path = os.path.join(self.tempdir, "readonly.pdf")
+		doc.save(locked_path)
+		doc.close()
+
+		pdf_bytes = fill_pdf(locked_path, {"FieldA": "Hello", "FieldB": "World"})
+		output = fitz.open(stream=pdf_bytes, filetype="pdf")
+		try:
+			flags = {
+				widget.field_name: widget.field_flags & fitz.PDF_FIELD_IS_READ_ONLY
+				for widget in output[0].widgets() or []
+			}
+			self.assertFalse(flags.get("FieldA"))
+			self.assertFalse(flags.get("FieldB"))
+			values = {widget.field_name: widget.field_value for widget in output[0].widgets() or []}
+			self.assertEqual(values.get("FieldA"), "Hello")
+			self.assertEqual(values.get("FieldB"), "World")
+		finally:
+			output.close()
+
 	def test_fill_pdf_fields_only_omits_background(self):
 		template_doc = fitz.open(self.template_path)
 		template_page = template_doc[0]
