@@ -60,6 +60,9 @@ frappe.provide("pdffiller.designer");
 		scale: 1,
 		fieldCounter: 1,
 		fieldFilter: "",
+		leftTab: "layout",
+		refView: "fields",
+		expandedGroups: {},
 		collapsedSections: {
 			fieldTypes: false,
 			referenceFields: false,
@@ -1787,6 +1790,45 @@ frappe.provide("pdffiller.designer");
 		`;
 	}
 
+	function renderSideBody() {
+		if (state.leftTab === "fields") return renderReferencePanel();
+		return `
+			<label class="pfd-side-search">
+				<span class="pfd-side-search-icon">${frappe.utils.icon("search", "xs")}</span>
+				<input type="search" class="pfd-field-filter" placeholder="${__(
+					"Search objects..."
+				)}" value="${frappe.utils.escape_html(state.fieldFilter || "")}" />
+			</label>
+			<div class="pfd-layout-body">${renderLayout()}</div>
+		`;
+	}
+
+	function renderSideTabs() {
+		const tab = state.leftTab === "fields" ? "fields" : "layout";
+		return `
+			<div class="pfd-side-tabs">
+				<button type="button" class="pfd-side-tab${
+					tab === "layout" ? " is-active" : ""
+				}" data-tab="layout">
+					${frappe.utils.icon("columns-2", "xs")}
+					<span>${__("Layout")}</span>
+				</button>
+				<button type="button" class="pfd-side-tab${
+					tab === "fields" ? " is-active" : ""
+				}" data-tab="fields">
+					${frappe.utils.icon("list", "xs")}
+					<span>${__("Reference Fields")}</span>
+				</button>
+			</div>
+			<div class="pfd-side-head">
+				<div class="pfd-side-title">${
+					tab === "fields" ? __("Reference Fields") : __("Workdesk Layout")
+				}</div>
+			</div>
+			<div class="pfd-side-body">${renderSideBody()}</div>
+		`;
+	}
+
 	function render() {
 		const app = getAppEl();
 		if (!app) return;
@@ -1812,15 +1854,8 @@ frappe.provide("pdffiller.designer");
 			</div>
 			<div class="pfd-main">
 				<div class="pfd-left">
+					${renderSideTabs()}
 					${renderCollapsibleSection("fieldTypes", __("Field Types"), renderPalette())}
-					${renderCollapsibleSection(
-						"referenceFields",
-						__("Reference Fields"),
-						`<input type="text" class="pfd-field-filter" placeholder="${__("Search fields…")}" value="${frappe.utils.escape_html(
-							state.fieldFilter
-						)}" />
-						<div class="pfd-ref-fields">${renderReferenceFields()}</div>`
-					)}
 				</div>
 				<div class="pfd-center pfd-canvas-container">${renderCanvas()}</div>
 				<div class="pfd-right">
@@ -1879,6 +1914,39 @@ frappe.provide("pdffiller.designer");
 	}
 
 	let highlightHover = null;
+
+	function bindSideBody(body) {
+		if (!body) return;
+		body.querySelector(".pfd-field-filter")?.addEventListener("input", (e) => {
+			state.fieldFilter = e.target.value;
+			if (state.leftTab === "fields") refreshRefBody();
+			else refreshLayoutBody();
+		});
+		body.querySelector(".pfd-ref-view")?.addEventListener("change", (e) => {
+			state.refView = e.target.value;
+			refreshRefBody();
+		});
+		bindRefBodyEvents(body.querySelector(".pfd-layout-body"));
+		bindRefBodyEvents(body.querySelector(".pfd-ref-body"));
+	}
+
+	function setLeftTab(tab) {
+		state.leftTab = tab === "fields" ? "fields" : "layout";
+		const left = document.querySelector("#pdffiller-designer-app .pfd-left");
+		if (!left) return;
+		left.querySelectorAll(".pfd-side-tab").forEach((btn) => {
+			btn.classList.toggle("is-active", btn.dataset.tab === state.leftTab);
+		});
+		const title = left.querySelector(".pfd-side-title");
+		if (title) {
+			title.textContent =
+				state.leftTab === "fields" ? __("Reference Fields") : __("Workdesk Layout");
+		}
+		const body = left.querySelector(".pfd-side-body");
+		if (!body) return;
+		body.innerHTML = renderSideBody();
+		bindSideBody(body);
+	}
 
 	function refreshLayoutBody() {
 		const body = document.querySelector(".pfd-layout-body");
@@ -2068,6 +2136,8 @@ frappe.provide("pdffiller.designer");
 				openClipboardMenu(e.clientX, e.clientY);
 			});
 		});
+		if (body.dataset.hoverBound) return;
+		body.dataset.hoverBound = "1";
 		body.addEventListener("mouseover", (e) => {
 			const el = hoverTarget(e.target);
 			if (!el || el === highlightHover) return;
@@ -2110,12 +2180,10 @@ frappe.provide("pdffiller.designer");
 			});
 		});
 
-		app.querySelector(".pfd-field-filter")?.addEventListener("input", (e) => {
-			state.fieldFilter = e.target.value;
-			refreshRefBody();
+		app.querySelectorAll(".pfd-side-tab").forEach((btn) => {
+			btn.addEventListener("click", () => setLeftTab(btn.dataset.tab));
 		});
-		bindRefBodyEvents(app.querySelector(".pfd-layout-body"));
-		bindRefBodyEvents(app.querySelector(".pfd-ref-body"));
+		bindSideBody(app.querySelector(".pfd-side-body"));
 		bindCanvasEvents(app.querySelector(".pfd-canvas-container"));
 		bindPropertyEvents(app.querySelector(".pfd-properties"));
 
