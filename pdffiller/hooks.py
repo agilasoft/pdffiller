@@ -9,7 +9,7 @@ app_include_js = [
 	"/assets/pdffiller/js/pdf_viewer_dialog.js",
 	"/assets/pdffiller/js/pdf_form_buttons.js",
 	"/assets/pdffiller/js/pdf_form_transfer.js",
-	"/assets/pdffiller/js/workdesk_layout.js?v=20261021b",
+	"/assets/pdffiller/js/workdesk_layout.js?v=20261022b",
 	"/assets/pdffiller/js/designer_multi_select.js",
 ]
 app_include_css = [
