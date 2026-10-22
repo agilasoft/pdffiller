@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import fitz
 
+from pdffiller.utils.output_options import apply_output_options
 from pdffiller.utils.pdf_filler import fill_template_pdf
 
 
@@ -129,6 +130,34 @@ class TestLoopingFill(unittest.TestCase):
 		try:
 			self.assertEqual(doc.page_count, 2)
 			self.assertEqual(list(doc[0].widgets() or []), [])
+		finally:
+			doc.close()
+
+	def test_flatten_keeps_editable_loop_widget_and_burns_the_locked_one(self):
+		template_doc = self._template()
+		template_doc.flatten = 1
+		template_doc.skip_draft_watermark = 0
+		for row in template_doc.field_mappings:
+			row.editable = 1 if row.pdf_field_name == "item_0" else 0
+		source_doc = self._source(["KEEP-OPEN", "BURN-LOCKED"])
+
+		with patch("pdffiller.utils.pdf_filler.get_pdf_path", return_value=self.template_path):
+			filled = fill_template_pdf(template_doc, source_doc)
+		source_doc.meta = SimpleNamespace(is_submittable=1)
+		source_doc.docstatus = 0
+		result = apply_output_options(filled, template_doc, source_doc)
+
+		doc = fitz.open(stream=result, filetype="pdf")
+		try:
+			widgets = {widget.field_name: widget for widget in doc[0].widgets() or []}
+			self.assertEqual(set(widgets), {"item_0__p1"})
+			self.assertEqual(widgets["item_0__p1"].field_value, "KEEP-OPEN")
+			self.assertFalse(widgets["item_0__p1"].field_flags & fitz.PDF_FIELD_IS_READ_ONLY)
+			text = doc[0].get_text()
+			self.assertIn("BURN-LOCKED", text)
+			self.assertIn("DRAFT", text)
+			_kind, appearances = doc.xref_get_key(doc.pdf_catalog(), "AcroForm/NeedAppearances")
+			self.assertIn("true", str(appearances).lower())
 		finally:
 			doc.close()
 

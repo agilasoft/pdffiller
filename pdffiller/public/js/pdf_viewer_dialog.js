@@ -72,8 +72,14 @@ frappe.provide("pdffiller.viewer");
 		`;
 	}
 
+	function has_editable_fields(fields) {
+		return (fields || []).some(function (field) {
+			return Boolean(field && field.editable);
+		});
+	}
+
 	function render_form_panel(fields) {
-		const editable_count = fields.filter((field) => field.editable).length;
+		const editable_count = (fields || []).filter((field) => field.editable).length;
 		const has_editable = editable_count > 0;
 		const fields_html = fields.map(render_field_input).join("");
 
@@ -130,7 +136,7 @@ frappe.provide("pdffiller.viewer");
 				</div>
 				<div class="pdffiller-warnings-host"></div>
 				<div class="pdffiller-viewer-body">
-					<div class="pdffiller-form-wrapper"></div>
+					<div class="pdffiller-form-wrapper pdffiller-form-wrapper--collapsed"></div>
 					<div class="pdffiller-viewer-frame">
 						<div class="pdffiller-loading text-muted">${__("Generating PDF...")}</div>
 					</div>
@@ -139,19 +145,71 @@ frappe.provide("pdffiller.viewer");
 		`;
 	}
 
-	function render_pdf_frame($frame, data_uri) {
-		const html = `
-			<object style="background:#323639;" width="100%" height="100%">
-				<embed
-					style="background:#323639;"
-					width="100%"
-					height="100%"
-					src="${frappe.utils.escape_html(data_uri)}"
-					type="application/pdf"
-				/>
-			</object>
-		`;
-		$frame.html(html);
+	function release_pdf_url(state) {
+		if (!state || !state.pdf_object_url) return;
+		URL.revokeObjectURL(state.pdf_object_url);
+		state.pdf_object_url = null;
+	}
+
+	function pdf_blob_url(data_uri) {
+		const comma = String(data_uri || "").indexOf(",");
+		if (comma < 0 || data_uri.indexOf("base64") < 0) return null;
+		const header = data_uri.slice(0, comma);
+		const body = data_uri.slice(comma + 1);
+		const mime_match = /data:([^;,]+)/.exec(header);
+		const mime = (mime_match && mime_match[1]) || "application/pdf";
+		const binary = atob(body);
+		const bytes = new Uint8Array(binary.length);
+		for (let i = 0; i < binary.length; i += 1) {
+			bytes[i] = binary.charCodeAt(i);
+		}
+		return URL.createObjectURL(new Blob([bytes], { type: mime }));
+	}
+
+	function render_pdf_frame($frame, data_uri, state) {
+		const previous = state && state.pdf_object_url;
+		let src = data_uri;
+		if (state) {
+			try {
+				const url = pdf_blob_url(data_uri);
+				state.pdf_object_url = url;
+				if (url) src = url;
+			} catch (error) {
+				state.pdf_object_url = null;
+			}
+		}
+		$frame.html(
+			`<iframe class="pdffiller-pdf-frame" title="${frappe.utils.escape_html(
+				__("PDF preview")
+			)}" src="${frappe.utils.escape_html(src)}"></iframe>`
+		);
+		if (previous && previous !== (state && state.pdf_object_url)) {
+			URL.revokeObjectURL(previous);
+		}
+	}
+
+	function bind_pdf_url_cleanup(dialog, state) {
+		dialog.$wrapper.on("hidden.bs.modal", function () {
+			release_pdf_url(state);
+		});
+	}
+
+	function sync_form_panel($viewer, state, fields) {
+		const was_editable = has_editable_fields(state.fields);
+		state.fields = fields || [];
+		const $wrapper = $viewer.find(".pdffiller-form-wrapper");
+		const user_collapsed = $wrapper.hasClass("pdffiller-form-wrapper--collapsed");
+		$wrapper.html(render_form_panel(state.fields));
+		const now_editable = has_editable_fields(state.fields);
+		// The shell starts collapsed. Open it once editable values arrive, and
+		// leave a column the user closed that way until the editable set changes.
+		if (now_editable && !was_editable) {
+			$wrapper.removeClass("pdffiller-form-wrapper--collapsed");
+		} else if (user_collapsed) {
+			$wrapper.addClass("pdffiller-form-wrapper--collapsed");
+		} else {
+			$wrapper.removeClass("pdffiller-form-wrapper--collapsed");
+		}
 	}
 
 	function collect_overrides($wrapper, fields) {
@@ -359,14 +417,7 @@ frappe.provide("pdffiller.viewer");
 
 	function apply_payload($viewer, state, payload) {
 		if (payload.fields) {
-			state.fields = payload.fields;
-			const collapsed = $viewer
-				.find(".pdffiller-form-wrapper")
-				.hasClass("pdffiller-form-wrapper--collapsed");
-			$viewer.find(".pdffiller-form-wrapper").html(render_form_panel(state.fields));
-			if (collapsed) {
-				$viewer.find(".pdffiller-form-wrapper").addClass("pdffiller-form-wrapper--collapsed");
-			}
+			sync_form_panel($viewer, state, payload.fields);
 		}
 		if (payload.fields_only !== undefined) {
 			state.fields_only = Boolean(payload.fields_only);
@@ -374,7 +425,7 @@ frappe.provide("pdffiller.viewer");
 		}
 		state.payload = payload;
 		show_warnings($viewer, payload.warnings);
-		render_pdf_frame($viewer.find(".pdffiller-viewer-frame"), payload.data_uri);
+		render_pdf_frame($viewer.find(".pdffiller-viewer-frame"), payload.data_uri, state);
 		$viewer
 			.find(".pdffiller-print-btn, .pdffiller-download-btn, .pdffiller-attach-btn, .pdffiller-email-btn")
 			.prop("disabled", false);
@@ -444,6 +495,7 @@ frappe.provide("pdffiller.viewer");
 		};
 		dialog.show();
 		dialog.$wrapper.find(".modal-body").addClass("pdffiller-dialog-body");
+		bind_pdf_url_cleanup(dialog, state);
 
 		const $preview = dialog.fields_dict.pdf_preview.$wrapper;
 		$preview.html(render_preview_shell());
@@ -451,7 +503,7 @@ frappe.provide("pdffiller.viewer");
 		$viewer.find(".pdffiller-fields-only-checkbox").prop("checked", state.fields_only);
 		$viewer
 			.find(".pdffiller-form-wrapper")
-			.addClass("pdffiller-form-wrapper--collapsed")
+			.toggleClass("pdffiller-form-wrapper--collapsed", !has_editable_fields(state.fields))
 			.html(render_form_panel(state.fields));
 
 		function reload() {
@@ -504,6 +556,7 @@ frappe.provide("pdffiller.viewer");
 		};
 		dialog.show();
 		dialog.$wrapper.find(".modal-body").addClass("pdffiller-dialog-body");
+		bind_pdf_url_cleanup(dialog, state);
 
 		const $preview = dialog.fields_dict.pdf_preview.$wrapper;
 		$preview.html(render_preview_shell());
@@ -540,7 +593,7 @@ frappe.provide("pdffiller.viewer");
 					.prop("checked", state.fields_only);
 				const $form_wrapper = $viewer.find(".pdffiller-form-wrapper");
 				$form_wrapper
-					.addClass("pdffiller-form-wrapper--collapsed")
+					.toggleClass("pdffiller-form-wrapper--collapsed", !has_editable_fields(state.fields))
 					.html(render_form_panel(state.fields));
 				bind_viewer_actions($viewer, state, frm, template_name, form_source);
 				load_filled_pdf($viewer, state, frm, template_name, form_source);

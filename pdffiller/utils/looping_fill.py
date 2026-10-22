@@ -22,6 +22,7 @@ from pdffiller.utils.page_planner import (
 )
 from pdffiller.utils.pdf_designer import list_field_layout
 from pdffiller.utils.pdf_filler import (
+	_commit_widget_flags,
 	_draw_checkbox,
 	_draw_radio_selection,
 	_draw_special_field,
@@ -277,8 +278,6 @@ def _append_fields_only_page(
 
 
 def _fill_page_widgets(page, form_data, readonly_fields, barcode_fields, image_fields, qr_fields=None):
-	import fitz
-
 	qr_fields = qr_fields or set()
 
 	page_widgets = list(page.widgets() or [])
@@ -296,7 +295,7 @@ def _fill_page_widgets(page, form_data, readonly_fields, barcode_fields, image_f
 				export_value = (value or "").strip()
 				selected = None
 				for widget in radio_widgets:
-					widget.field_flags = widget.field_flags | fitz.PDF_FIELD_IS_READ_ONLY
+					_commit_widget_flags(page.parent, widget, True, update=False)
 					from pdffiller.utils.pdf_filler import _widget_matches_radio
 
 					if _widget_matches_radio(widget, field_name, export_value):
@@ -304,6 +303,10 @@ def _fill_page_widgets(page, form_data, readonly_fields, barcode_fields, image_f
 				if selected:
 					selected.field_value = export_value
 					selected.update()
+					_commit_widget_flags(page.parent, selected, True, update=False)
+			else:
+				for widget in radio_widgets:
+					_commit_widget_flags(page.parent, widget, False, update=False)
 			radio_done.add(field_name)
 			continue
 
@@ -317,17 +320,69 @@ def _fill_page_widgets(page, form_data, readonly_fields, barcode_fields, image_f
 			)
 		else:
 			_set_widget_value(widget, value)
-		if field_name in readonly_fields:
-			widget.field_flags = widget.field_flags | fitz.PDF_FIELD_IS_READ_ONLY
-		widget.update()
+		_commit_widget_flags(page.parent, widget, field_name in readonly_fields)
+
+
+def _flags_on_widget(doc, widget) -> int:
+	"""Prefer the persisted field ``/Ff``. ``field_flags`` can lag behind it."""
+	from pdffiller.utils.output_options import field_dict_xref
+
+	flags = int(widget.field_flags or 0)
+	xref = field_dict_xref(doc, widget)
+	if doc is None or not xref:
+		return flags
+	try:
+		kind, value = doc.xref_get_key(xref, "Ff")
+	except Exception:
+		return flags
+	if kind in ("null", "none") or value in (None, "", "null"):
+		return flags
+	try:
+		return int(str(value).split()[0])
+	except (TypeError, ValueError):
+		return flags
 
 
 def _suffix_widget_names(page, page_n: int) -> None:
-	for widget in page.widgets() or []:
+	"""Rename widgets per output page.
+
+	``widget.update()`` can put the ReadOnly bit back and, on PyMuPDF 2, does
+	not store a new field name. Write ``/T`` and ``/Ff`` on the field dictionary.
+	"""
+	from pdffiller.utils.output_options import write_field_flags, write_field_name
+
+	doc = page.parent
+	renamed: list[tuple[int, str, int]] = []
+	for widget in list(page.widgets() or []):
 		if not widget.field_name:
 			continue
-		widget.field_name = f"{widget.field_name}__p{page_n}"
-		widget.update()
+		flags = _flags_on_widget(doc, widget)
+		new_name = f"{widget.field_name}__p{page_n}"
+		annot = int(getattr(widget, "xref", 0) or 0)
+		write_field_name(doc, widget, new_name)
+		try:
+			widget.update()
+		except Exception:
+			pass
+		renamed.append((annot, new_name, flags))
+
+	fresh: dict[int, object] = {}
+	by_name: dict[str, list] = {}
+	for widget in page.widgets() or []:
+		annot = int(getattr(widget, "xref", 0) or 0)
+		if annot:
+			fresh[annot] = widget
+		by_name.setdefault(widget.field_name, []).append(widget)
+	for annot, name, flags in renamed:
+		widget = fresh.get(annot)
+		if widget is None:
+			bucket = by_name.get(name) or []
+			widget = bucket.pop(0) if bucket else None
+		if widget is None:
+			continue
+		write_field_name(doc, widget, name)
+		widget.field_flags = flags
+		write_field_flags(doc, widget, flags)
 
 
 def should_use_looping_fill(template_doc, pdf_path: str | None = None) -> bool:

@@ -72,7 +72,7 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "Editable",
-   "description": "When unchecked, the field cannot be edited in the PDF filler side panel or directly in the embedded PDF."
+   "description": "When checked, the value can be changed in the print review side panel and in the embedded PDF. Flatten PDF does not lock these fields."
   },
   {
    "fieldname": "repeat_table",
