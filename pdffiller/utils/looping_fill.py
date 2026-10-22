@@ -323,12 +323,66 @@ def _fill_page_widgets(page, form_data, readonly_fields, barcode_fields, image_f
 		_commit_widget_flags(page.parent, widget, field_name in readonly_fields)
 
 
+def _flags_on_widget(doc, widget) -> int:
+	"""Prefer the persisted field ``/Ff``. ``field_flags`` can lag behind it."""
+	from pdffiller.utils.output_options import field_dict_xref
+
+	flags = int(widget.field_flags or 0)
+	xref = field_dict_xref(doc, widget)
+	if doc is None or not xref:
+		return flags
+	try:
+		kind, value = doc.xref_get_key(xref, "Ff")
+	except Exception:
+		return flags
+	if kind in ("null", "none") or value in (None, "", "null"):
+		return flags
+	try:
+		return int(str(value).split()[0])
+	except (TypeError, ValueError):
+		return flags
+
+
 def _suffix_widget_names(page, page_n: int) -> None:
-	for widget in page.widgets() or []:
+	"""Rename widgets per output page.
+
+	``widget.update()`` can put the ReadOnly bit back and, on PyMuPDF 2, does
+	not store a new field name. Write ``/T`` and ``/Ff`` on the field dictionary.
+	"""
+	from pdffiller.utils.output_options import write_field_flags, write_field_name
+
+	doc = page.parent
+	renamed: list[tuple[int, str, int]] = []
+	for widget in list(page.widgets() or []):
 		if not widget.field_name:
 			continue
-		widget.field_name = f"{widget.field_name}__p{page_n}"
-		widget.update()
+		flags = _flags_on_widget(doc, widget)
+		new_name = f"{widget.field_name}__p{page_n}"
+		annot = int(getattr(widget, "xref", 0) or 0)
+		write_field_name(doc, widget, new_name)
+		try:
+			widget.update()
+		except Exception:
+			pass
+		renamed.append((annot, new_name, flags))
+
+	fresh: dict[int, object] = {}
+	by_name: dict[str, list] = {}
+	for widget in page.widgets() or []:
+		annot = int(getattr(widget, "xref", 0) or 0)
+		if annot:
+			fresh[annot] = widget
+		by_name.setdefault(widget.field_name, []).append(widget)
+	for annot, name, flags in renamed:
+		widget = fresh.get(annot)
+		if widget is None:
+			bucket = by_name.get(name) or []
+			widget = bucket.pop(0) if bucket else None
+		if widget is None:
+			continue
+		write_field_name(doc, widget, name)
+		widget.field_flags = flags
+		write_field_flags(doc, widget, flags)
 
 
 def should_use_looping_fill(template_doc, pdf_path: str | None = None) -> bool:

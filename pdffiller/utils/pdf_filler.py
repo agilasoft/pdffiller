@@ -70,6 +70,8 @@ def _commit_widget_flags(doc, widget, readonly: bool, *, update: bool = True) ->
 	"""Persist the ReadOnly bit. ``widget.update()`` can put it back when flags are 0."""
 	import fitz
 
+	from pdffiller.utils.output_options import write_field_flags
+
 	flags = int(widget.field_flags or 0)
 	mask = int(fitz.PDF_FIELD_IS_READ_ONLY)
 	if readonly:
@@ -78,10 +80,11 @@ def _commit_widget_flags(doc, widget, readonly: bool, *, update: bool = True) ->
 		flags &= ~mask
 	widget.field_flags = flags
 	if update:
-		widget.update()
-	xref = int(getattr(widget, "xref", 0) or 0)
-	if doc is not None and xref:
-		doc.xref_set_key(xref, "Ff", str(flags))
+		try:
+			widget.update()
+		except Exception:
+			pass
+	write_field_flags(doc, widget, flags)
 
 
 def _widget_matches_radio(widget, field_name: str, export_value: str) -> bool:

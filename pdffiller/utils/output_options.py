@@ -146,10 +146,14 @@ def _flatten_except(doc, keep_fields: set[str]) -> None:
 		if page_no < 0 or page_no >= doc.page_count:
 			continue
 		page = doc[page_no]
+		# A failed restore must not paint the value as static text. That is what
+		# makes an "editable" field impossible to change in the print review.
 		try:
 			_restore_widget(page, spec)
 		except Exception:
-			_burn_snapshot(page, spec)
+			_restore_plain_text_widget(page, spec)
+	if snapshots:
+		_enable_need_appearances(doc)
 
 
 def _snapshot_widget(doc, widget) -> dict:
@@ -185,9 +189,77 @@ def _snapshot_widget(doc, widget) -> dict:
 	}
 
 
-def _pdf_literal(value: str) -> str:
-	escaped = value.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+def pdf_literal(value: str) -> str:
+	escaped = str(value).replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 	return f"({escaped})"
+
+
+def field_dict_xref(doc, widget) -> int:
+	"""Xref of the field dictionary.
+
+	PyMuPDF 2 keeps ``/T`` and ``/Ff`` on the widget's parent. Older files store
+	them on the widget annotation itself.
+	"""
+	xref = int(getattr(widget, "xref", 0) or 0)
+	if doc is None or not xref:
+		return xref
+	try:
+		kind, parent = doc.xref_get_key(xref, "Parent")
+	except Exception:
+		return xref
+	if kind != "xref" or not parent:
+		return xref
+	try:
+		parent_xref = int(str(parent).split()[0])
+	except (TypeError, ValueError):
+		return xref
+	if parent_xref <= 0:
+		return xref
+	try:
+		name_kind, _name = doc.xref_get_key(parent_xref, "T")
+	except Exception:
+		return xref
+	if name_kind in ("null", "none"):
+		try:
+			type_kind, _field_type = doc.xref_get_key(parent_xref, "FT")
+		except Exception:
+			return xref
+		if type_kind in ("null", "none"):
+			return xref
+	return parent_xref
+
+
+def write_field_flags(doc, widget, flags: int) -> None:
+	"""Persist ``/Ff`` on the field dictionary and the widget annotation."""
+	if doc is None:
+		return
+	flags = int(flags)
+	written: list[int] = []
+	annot = int(getattr(widget, "xref", 0) or 0)
+	for xref in (annot, field_dict_xref(doc, widget)):
+		if not xref or xref in written:
+			continue
+		written.append(xref)
+		try:
+			doc.xref_set_key(xref, "Ff", str(flags))
+		except Exception:
+			pass
+
+
+def write_field_name(doc, widget, name: str) -> None:
+	"""Persist ``/T``. ``widget.update()`` does not store a renamed field."""
+	widget.field_name = name
+	xref = field_dict_xref(doc, widget)
+	if doc is None or not xref:
+		return
+	try:
+		doc.xref_set_key(xref, "T", pdf_literal(name))
+	except Exception:
+		pass
+
+
+def _pdf_literal(value: str) -> str:
+	return pdf_literal(value)
 
 
 def _restore_xref_style(doc, widget, spec: dict) -> None:
@@ -201,7 +273,7 @@ def _restore_xref_style(doc, widget, spec: dict) -> None:
 	if quad and kind_q not in ("null", "none") and str(quad) not in ("null", "none"):
 		doc.xref_set_key(xref, "Q", str(quad).split()[0])
 	# update() can put the ReadOnly bit back when the flag value is 0, so write Ff directly.
-	doc.xref_set_key(xref, "Ff", str(int(spec.get("field_flags") or 0)))
+	write_field_flags(doc, widget, int(spec.get("field_flags") or 0))
 
 
 def _widget_by_name(page, field_name: str, index: int):
@@ -213,11 +285,33 @@ def _widget_by_name(page, field_name: str, index: int):
 	return matches[-1]
 
 
+def _enable_need_appearances(doc) -> None:
+	"""Ask viewers to draw the filled value and treat the widget as a field."""
+	try:
+		catalog = doc.pdf_catalog()
+	except Exception:
+		return
+	try:
+		kind, _value = doc.xref_get_key(catalog, "AcroForm")
+	except Exception:
+		return
+	if kind in ("null", "none"):
+		return
+	try:
+		doc.xref_set_key(catalog, "AcroForm/NeedAppearances", "true")
+	except Exception:
+		pass
+
+
+def _widget_names(page) -> list[str]:
+	return [item.field_name for item in page.widgets() or [] if item.field_name]
+
+
 def _restore_widget(page, spec: dict) -> None:
 	import fitz
 
 	field_name = spec["field_name"]
-	existing = sum(1 for item in page.widgets() or [] if item.field_name == field_name)
+	before = _widget_names(page).count(field_name)
 	widget = fitz.Widget()
 	widget.field_name = field_name
 	widget.field_type = spec["field_type"]
@@ -243,14 +337,49 @@ def _restore_widget(page, spec: dict) -> None:
 	if spec.get("field_label"):
 		widget.field_label = spec["field_label"]
 	page.add_widget(widget)
+	_finish_restored_widget(page, spec, before)
+
+
+def _restore_plain_text_widget(page, spec: dict) -> None:
+	"""Second attempt: a text widget with the same name, rect, and value."""
+	import fitz
+
+	field_name = spec["field_name"]
+	already = _widget_names(page).count(field_name)
+	if already:
+		try:
+			_finish_restored_widget(page, spec, already - 1)
+		except Exception:
+			pass
+		return
+	widget = fitz.Widget()
+	widget.field_name = field_name
+	widget.field_type = fitz.PDF_WIDGET_TYPE_TEXT
+	widget.rect = spec["rect"]
+	value = spec.get("field_value")
+	widget.field_value = "" if value is None else str(value)
+	widget.field_flags = int(spec.get("field_flags") or 0)
+	if spec.get("text_fontsize"):
+		widget.text_fontsize = spec["text_fontsize"]
+	try:
+		page.add_widget(widget)
+	except Exception:
+		return
+	try:
+		_finish_restored_widget(page, spec, _widget_names(page).count(field_name) - 1)
+	except Exception:
+		pass
+
+
+def _finish_restored_widget(page, spec: dict, existing: int) -> None:
 	doc = page.parent
-	stored = _widget_by_name(page, field_name, existing)
+	stored = _widget_by_name(page, spec["field_name"], existing)
 	_restore_xref_style(doc, stored, spec)
 	try:
 		stored.update()
 	except Exception:
 		pass
-	stored = _widget_by_name(page, field_name, existing)
+	stored = _widget_by_name(page, spec["field_name"], existing)
 	_restore_xref_style(doc, stored, spec)
 
 

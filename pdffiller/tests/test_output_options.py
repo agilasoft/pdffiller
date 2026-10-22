@@ -157,6 +157,8 @@ class TestOutputOptions(unittest.TestCase):
 			self.assertFalse(widgets["Open"].field_flags & fitz.PDF_FIELD_IS_READ_ONLY)
 			self.assertIn("KEEP TEXT", doc[0].get_text())
 			self.assertIn("DRAFT", doc[0].get_text())
+			_kind, appearances = doc.xref_get_key(doc.pdf_catalog(), "AcroForm/NeedAppearances")
+			self.assertIn("true", str(appearances).lower())
 		finally:
 			doc.close()
 

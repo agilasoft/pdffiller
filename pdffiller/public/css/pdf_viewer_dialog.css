@@ -83,6 +83,8 @@
 	border-right: 1px solid var(--border-color);
 	background: var(--card-bg);
 	overflow: auto;
+	position: relative;
+	z-index: 2;
 	transition: width 0.2s ease, min-width 0.2s ease;
 }
 
@@ -180,12 +182,20 @@
 	min-height: 0;
 	background: #323639;
 	position: relative;
+	z-index: 0;
+	overflow: hidden;
+	isolation: isolate;
 }
 
 .pdffiller-viewer-frame object,
-.pdffiller-viewer-frame embed {
+.pdffiller-viewer-frame embed,
+.pdffiller-viewer-frame iframe,
+.pdffiller-pdf-frame {
 	display: block;
+	width: 100%;
+	height: 100%;
 	border: 0;
+	background: #323639;
 }
 
 .pdffiller-loading {
