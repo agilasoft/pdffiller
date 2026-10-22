@@ -48,6 +48,7 @@ frappe.provide("pdffiller.print_designer");
 	const NO_TEXT_STYLE = ["Check", "Select", "Barcode", "QR Code", "Image", "Signature"];
 
 	let pageInstance = null;
+	let lastPasteAt = 0;
 	let dragState = null;
 	let justDropped = false;
 	let undoStack = [];
@@ -317,14 +318,16 @@ frappe.provide("pdffiller.print_designer");
 		renderPropertiesPanel();
 	}
 
-	function copySelection() {
+	function copySelection(options = {}) {
 		const api = multiSelect();
 		const objects = selectedObjects();
 		if (!api || !objects.length) {
-			frappe.show_alert({ message: __("Select an object to copy"), indicator: "orange" });
-			return;
+			if (!options.silent) {
+				frappe.show_alert({ message: __("Select an object to copy"), indicator: "orange" });
+			}
+			return null;
 		}
-		api.writeClipboard({
+		const data = api.writeClipboard({
 			source: {
 				editor: "print",
 				document: state.designName || "",
@@ -333,18 +336,30 @@ frappe.provide("pdffiller.print_designer");
 			},
 			objects: objects.map((el) => ({ ...el })),
 		});
-		frappe.show_alert({
-			message: __("Copied {0} object(s)", [String(objects.length)]),
-			indicator: "green",
-		});
+		if (!options.systemEvent) api.publishClipboard(data);
+		if (!options.silent) {
+			frappe.show_alert({
+				message: __("Copied {0} object(s)", [String(objects.length)]),
+				indicator: "green",
+			});
+		}
 		renderPropertiesPanel();
+		return data;
 	}
 
-	function pasteClipboard() {
+	function pasteClipboard(explicitClip) {
 		const api = multiSelect();
-		const clip = api && api.readClipboard();
 		const page = getCurrentPage();
-		if (!api || !clip || !page) {
+		if (!api || !page) {
+			frappe.show_alert({ message: __("Nothing to paste"), indicator: "orange" });
+			return;
+		}
+		const clip = explicitClip || api.readClipboard();
+		if (!clip) {
+			if (explicitClip === undefined && typeof api.readSystemClipboard === "function") {
+				api.readSystemClipboard().then((systemClip) => pasteClipboard(systemClip || false));
+				return;
+			}
 			frappe.show_alert({ message: __("Nothing to paste"), indicator: "orange" });
 			return;
 		}
@@ -365,6 +380,9 @@ frappe.provide("pdffiller.print_designer");
 			frappe.show_alert({ message: __("Nothing to paste"), indicator: "orange" });
 			return;
 		}
+		const now = Date.now();
+		if (now - lastPasteAt < 250) return;
+		lastPasteAt = now;
 		pushUndo("paste");
 		page.elements = page.elements || [];
 		const ids = [];
@@ -1972,13 +1990,18 @@ frappe.provide("pdffiller.print_designer");
 					${__("Always print Last")}
 				</label>
 			</div>
-			<div class="ppd-canvas-stage">
+			<div class="ppd-canvas-stage${rulersEnabled() ? "" : " ppd-rulers-off"}">
 				<div class="ppd-ruler-corner"></div>
 				<div class="ppd-ruler-top">${renderRuler("x", state.layout.page_width, 32)}</div>
 				<div class="ppd-ruler-left">${renderRuler("y", state.layout.page_height, 24)}</div>
 				<div class="ppd-canvas-scroll">
 					<div class="pfd-canvas-wrap" style="width:${pageW}px;height:${pageH}px;">
 						<div class="pfd-canvas-overlay ppd-blank-page">${elementsHtml}${renderSelectionBox()}${renderFloatToolbar(selected)}</div>
+						<div class="pfd-guides" hidden>
+							<div class="pfd-guide pfd-guide-x"></div>
+							<div class="pfd-guide pfd-guide-y"></div>
+							<div class="pfd-guide-label"></div>
+						</div>
 					</div>
 				</div>
 				<div class="ppd-zoom-bar">
@@ -2299,6 +2322,9 @@ frappe.provide("pdffiller.print_designer");
 						<button type="button" class="btn btn-default btn-sm pfd-sample-btn">${
 							state.sampleDoc ? __("Clear sample") : __("Sample")
 						}</button>
+						<button type="button" class="btn btn-default btn-sm pfd-ruler-btn${
+							rulersEnabled() ? " btn-primary" : ""
+						}" title="${__("Show or hide rulers and guides")}">${__("Ruler")}</button>
 						<button type="button" class="btn btn-default btn-sm pfd-preview-btn">${__("Preview")}</button>
 						<button type="button" class="btn btn-default btn-sm pfd-cancel-btn">${__("Back")}</button>
 						<button type="button" class="btn btn-primary btn-sm pfd-save-btn">${__("Save Design")}</button>
@@ -2553,6 +2579,7 @@ frappe.provide("pdffiller.print_designer");
 		app.querySelector(".pfd-save-btn")?.addEventListener("click", saveDesign);
 		app.querySelector(".pfd-ai-btn")?.addEventListener("click", openAIAssist);
 		app.querySelector(".pfd-sample-btn")?.addEventListener("click", loadSampleDocument);
+		app.querySelector(".pfd-ruler-btn")?.addEventListener("click", toggleRulers);
 		app.querySelector(".pfd-preview-btn")?.addEventListener("click", previewWithDocument);
 		app.querySelector(".pfd-cancel-btn")?.addEventListener("click", () => {
 			if (state.dirty && !confirm(__("Discard unsaved changes?"))) return;
@@ -2604,8 +2631,55 @@ frappe.provide("pdffiller.print_designer");
 		bindPropertyEvents(app.querySelector(".pfd-properties"));
 	}
 
+	function rulersEnabled() {
+		try {
+			return localStorage.getItem("pdffiller.designer.rulers") !== "0";
+		} catch (err) {
+			return true;
+		}
+	}
+
+	function toggleRulers() {
+		const next = !rulersEnabled();
+		try {
+			localStorage.setItem("pdffiller.designer.rulers", next ? "1" : "0");
+		} catch (err) {
+			// The button still updates for this visit.
+		}
+		render();
+	}
+
+	function bindRulerGuides(container) {
+		const wrap = container.querySelector(".pfd-canvas-wrap");
+		const guides = container.querySelector(".pfd-guides");
+		if (!wrap || !guides || !rulersEnabled()) return;
+		const guideX = guides.querySelector(".pfd-guide-x");
+		const guideY = guides.querySelector(".pfd-guide-y");
+		const label = guides.querySelector(".pfd-guide-label");
+		wrap.addEventListener("mousemove", (e) => {
+			const width = state.layout.page_width;
+			const height = state.layout.page_height;
+			const rect = wrap.getBoundingClientRect();
+			if (!width || !height || !rect.width || !rect.height) return;
+			const x = e.clientX - rect.left;
+			const y = e.clientY - rect.top;
+			guides.hidden = false;
+			guideX.style.top = `${y}px`;
+			guideY.style.left = `${x}px`;
+			const mmX = Math.round(((x / rect.width) * width) / PT_PER_MM);
+			const mmY = Math.round(((y / rect.height) * height) / PT_PER_MM);
+			label.textContent = `${mmX} mm, ${mmY} mm`;
+			label.style.left = `${Math.min(x + 8, rect.width - 78)}px`;
+			label.style.top = `${Math.min(y + 8, rect.height - 18)}px`;
+		});
+		wrap.addEventListener("mouseleave", () => {
+			guides.hidden = true;
+		});
+	}
+
 	function bindCanvasEvents(container) {
 		if (!container) return;
+		bindRulerGuides(container);
 		container.querySelectorAll(".pfd-prev-page").forEach((btn) => {
 			btn.addEventListener("click", () => {
 				if (state.currentPage > 0) {
@@ -3074,16 +3148,7 @@ frappe.provide("pdffiller.print_designer");
 			else groupSelection();
 			return;
 		}
-		if (modifier && key === "c") {
-			e.preventDefault();
-			copySelection();
-			return;
-		}
-		if (modifier && key === "v") {
-			e.preventDefault();
-			pasteClipboard();
-			return;
-		}
+		if (modifier && (key === "c" || key === "v")) return;
 		if (e.key === "Escape") {
 			state.activeTool = "";
 			clearSelection();
@@ -3142,6 +3207,42 @@ frappe.provide("pdffiller.print_designer");
 
 	pdffiller.print_designer.refresh = refresh;
 	document.addEventListener("keydown", onKeyDown);
+	document.addEventListener("copy", onCopyEvent);
+	document.addEventListener("paste", onPasteEvent);
+
+	function printDesignerActive() {
+		const route = frappe.get_route();
+		return Array.isArray(route) && route[0] === "pdf-print-designer" && Boolean(getAppEl());
+	}
+
+	function typingTarget(target) {
+		const tag = (target && target.tagName) || "";
+		if (["INPUT", "TEXTAREA", "SELECT"].includes(tag)) return true;
+		return Boolean(target && target.isContentEditable);
+	}
+
+	function onCopyEvent(e) {
+		if (!printDesignerActive() || typingTarget(e.target)) return;
+		if (!currentSelection().length) return;
+		const data = copySelection({ systemEvent: true });
+		if (!data || !e.clipboardData) return;
+		const raw = JSON.stringify(data);
+		e.clipboardData.setData("application/x-pdffiller-fields", raw);
+		e.clipboardData.setData("text/plain", raw);
+		e.preventDefault();
+	}
+
+	function onPasteEvent(e) {
+		if (!printDesignerActive() || typingTarget(e.target)) return;
+		const api = multiSelect();
+		const raw =
+			e.clipboardData &&
+			(e.clipboardData.getData("application/x-pdffiller-fields") || e.clipboardData.getData("text/plain"));
+		const parsed = api && api.parseClipboardPayload(raw);
+		pasteClipboard(parsed || undefined);
+		e.preventDefault();
+	}
+
 	window.addEventListener("beforeunload", (e) => {
 		if (state.dirty) e.preventDefault();
 	});

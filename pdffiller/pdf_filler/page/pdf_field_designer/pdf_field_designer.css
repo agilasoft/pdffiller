@@ -393,6 +393,141 @@ button.pfd-layout-item {
 	color: #2d4a2a;
 }
 
+.pfd-sheet {
+	width: 100%;
+}
+
+.pfd-sheet .pfd-canvas-wrap {
+	width: 100%;
+}
+
+.pfd-sheet--rulers {
+	display: grid;
+	grid-template-columns: 28px minmax(0, 1fr);
+	grid-template-rows: 22px auto;
+}
+
+.pfd-ruler-corner {
+	grid-column: 1;
+	grid-row: 1;
+	background: #f8fafc;
+	border-right: 1px solid #e5e7eb;
+	border-bottom: 1px solid #e5e7eb;
+}
+
+.pfd-ruler {
+	position: relative;
+	overflow: hidden;
+	background: #f8fafc;
+}
+
+.pfd-ruler-x {
+	grid-column: 2;
+	grid-row: 1;
+	border-bottom: 1px solid #e5e7eb;
+}
+
+.pfd-ruler-y {
+	grid-column: 1;
+	grid-row: 2;
+	border-right: 1px solid #e5e7eb;
+}
+
+.pfd-ruler-tick {
+	position: absolute;
+	background: #9ca3af;
+}
+
+.pfd-ruler-x .pfd-ruler-tick {
+	width: 1px;
+	bottom: 0;
+}
+
+.pfd-ruler-y .pfd-ruler-tick {
+	height: 1px;
+	right: 0;
+}
+
+.pfd-ruler-label {
+	position: absolute;
+	font-size: 9px;
+	line-height: 1;
+	color: #6b7280;
+	pointer-events: none;
+}
+
+.pfd-ruler-x .pfd-ruler-label {
+	top: 2px;
+	transform: translateX(2px);
+}
+
+.pfd-ruler-y .pfd-ruler-label {
+	left: 2px;
+	transform: translateY(1px);
+}
+
+.pfd-ruler-x::after,
+.pfd-ruler-y::after {
+	content: "";
+	position: absolute;
+	background: #2490ef;
+	pointer-events: none;
+}
+
+.pfd-ruler-x::after {
+	top: 0;
+	bottom: 0;
+	width: 1px;
+	left: var(--pfd-marker, -20px);
+}
+
+.pfd-ruler-y::after {
+	left: 0;
+	right: 0;
+	height: 1px;
+	top: var(--pfd-marker, -20px);
+}
+
+.pfd-sheet--rulers .pfd-canvas-wrap {
+	grid-column: 2;
+	grid-row: 2;
+}
+
+.pfd-guides {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	z-index: 8;
+}
+
+.pfd-guide {
+	position: absolute;
+	background: rgba(36, 144, 239, 0.85);
+}
+
+.pfd-guide-x {
+	left: 0;
+	right: 0;
+	height: 1px;
+}
+
+.pfd-guide-y {
+	top: 0;
+	bottom: 0;
+	width: 1px;
+}
+
+.pfd-guide-label {
+	position: absolute;
+	padding: 1px 4px;
+	border-radius: 3px;
+	background: #2490ef;
+	color: #fff;
+	font-size: 10px;
+	line-height: 14px;
+	white-space: nowrap;
+}
+
 .pfd-canvas-wrap {
 	position: relative;
 	box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);

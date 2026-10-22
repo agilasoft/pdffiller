@@ -35,6 +35,7 @@ frappe.provide("pdffiller.designer");
 	const UNDO_COALESCE_MS = 500;
 
 	let pageInstance = null;
+	let lastPasteAt = 0;
 	let dragState = null;
 	let skipOverlayClick = false;
 	let undoStack = [];
@@ -295,14 +296,16 @@ frappe.provide("pdffiller.designer");
 		renderPropertiesPanel();
 	}
 
-	function copySelection() {
+	function copySelection(options = {}) {
 		const api = multiSelect();
 		const objects = selectedObjects();
 		if (!api || !objects.length) {
-			frappe.show_alert({ message: __("Select an object to copy"), indicator: "orange" });
-			return;
+			if (!options.silent) {
+				frappe.show_alert({ message: __("Select an object to copy"), indicator: "orange" });
+			}
+			return null;
 		}
-		api.writeClipboard({
+		const data = api.writeClipboard({
 			source: {
 				editor: "field",
 				document: state.templateName || "",
@@ -311,18 +314,30 @@ frappe.provide("pdffiller.designer");
 			},
 			objects: objects.map((field) => ({ ...field, kind: "field" })),
 		});
-		frappe.show_alert({
-			message: __("Copied {0} object(s)", [String(objects.length)]),
-			indicator: "green",
-		});
+		if (!options.systemEvent) api.publishClipboard(data);
+		if (!options.silent) {
+			frappe.show_alert({
+				message: __("Copied {0} object(s)", [String(objects.length)]),
+				indicator: "green",
+			});
+		}
 		renderPropertiesPanel();
+		return data;
 	}
 
-	function pasteClipboard() {
+	function pasteClipboard(explicitClip) {
 		const api = multiSelect();
-		const clip = api && api.readClipboard();
 		const page = getCurrentPage();
-		if (!api || !clip || !page) {
+		if (!api || !page) {
+			frappe.show_alert({ message: __("Nothing to paste"), indicator: "orange" });
+			return;
+		}
+		const clip = explicitClip || api.readClipboard();
+		if (!clip) {
+			if (explicitClip === undefined && typeof api.readSystemClipboard === "function") {
+				api.readSystemClipboard().then((systemClip) => pasteClipboard(systemClip || false));
+				return;
+			}
 			frappe.show_alert({ message: __("Nothing to paste"), indicator: "orange" });
 			return;
 		}
@@ -346,6 +361,9 @@ frappe.provide("pdffiller.designer");
 			});
 			return;
 		}
+		const now = Date.now();
+		if (now - lastPasteAt < 250) return;
+		lastPasteAt = now;
 		pushUndo("paste");
 		const ids = [];
 		prepared.objects.forEach((obj) => {
@@ -1585,6 +1603,8 @@ frappe.provide("pdffiller.designer");
 				`<option value="${role}" ${role === pageRole ? "selected" : ""}>${__(role)}</option>`
 		).join("");
 
+		const showRulers = rulersEnabled();
+		const sheetStyle = `width:100%;max-width:${page.width_pt * 1.2 + (showRulers ? 28 : 0)}px;`;
 		return `
 			<div class="pfd-page-nav">
 				<button type="button" class="btn btn-default btn-sm pfd-prev-page" ${
@@ -1598,13 +1618,69 @@ frappe.provide("pdffiller.designer");
 					<select class="pfd-page-role">${roleOptions}</select>
 				</label>
 			</div>
-			<div class="pfd-canvas-wrap" style="width:100%;max-width:${page.width_pt * 1.2}px;">
-				<img class="pfd-canvas-image" src="${page.image_data_uri}" alt="${__(
-					"PDF page"
-				)} ${state.currentPage + 1}" draggable="false" />
-				<div class="pfd-canvas-overlay">${fieldsHtml}${renderSelectionBox()}</div>
+			<div class="pfd-sheet${showRulers ? " pfd-sheet--rulers" : ""}" style="${sheetStyle}">
+				${
+					showRulers
+						? `<div class="pfd-ruler-corner"></div>
+							<div class="pfd-ruler pfd-ruler-x">${renderPointRuler("x", page.width_pt)}</div>
+							<div class="pfd-ruler pfd-ruler-y">${renderPointRuler("y", page.height_pt)}</div>`
+						: ""
+				}
+				<div class="pfd-canvas-wrap">
+					<img class="pfd-canvas-image" src="${page.image_data_uri}" alt="${__(
+						"PDF page"
+					)} ${state.currentPage + 1}" draggable="false" />
+					<div class="pfd-canvas-overlay">${fieldsHtml}${renderSelectionBox()}</div>
+					<div class="pfd-guides" hidden>
+						<div class="pfd-guide pfd-guide-x"></div>
+						<div class="pfd-guide pfd-guide-y"></div>
+						<div class="pfd-guide-label"></div>
+					</div>
+				</div>
 			</div>
 		`;
+	}
+
+	function rulersEnabled() {
+		try {
+			return localStorage.getItem("pdffiller.designer.rulers") !== "0";
+		} catch (err) {
+			return true;
+		}
+	}
+
+	function toggleRulers() {
+		const next = !rulersEnabled();
+		try {
+			localStorage.setItem("pdffiller.designer.rulers", next ? "1" : "0");
+		} catch (err) {
+			// The button still updates for this visit.
+		}
+		render();
+	}
+
+	function renderPointRuler(axis, lengthPt) {
+		const length = Number(lengthPt) || 0;
+		if (!length) return "";
+		const step = length > 900 ? 25 : 10;
+		const ticks = [];
+		for (let pt = 0; pt <= length + 0.01; pt += step) {
+			const pct = (pt / length) * 100;
+			const major = pt % (step * 5) === 0;
+			const size = major ? 12 : pt % (step * 2) === 0 ? 8 : 4;
+			if (axis === "x") {
+				ticks.push(`<span class="pfd-ruler-tick" style="left:${pct}%;height:${size}px"></span>`);
+				if (major) {
+					ticks.push(`<span class="pfd-ruler-label" style="left:${pct}%">${pt}</span>`);
+				}
+			} else {
+				ticks.push(`<span class="pfd-ruler-tick" style="top:${pct}%;width:${size}px"></span>`);
+				if (major && pt) {
+					ticks.push(`<span class="pfd-ruler-label" style="top:${pct}%">${pt}</span>`);
+				}
+			}
+		}
+		return ticks.join("");
 	}
 
 	function renderSelectOptions(options, selected) {
@@ -1844,6 +1920,9 @@ frappe.provide("pdffiller.designer");
 						${frappe.utils.icon("magic", "xs")}
 						${__("AI Assist")}
 					</button>
+					<button type="button" class="btn btn-default btn-sm pfd-ruler-btn${
+						rulersEnabled() ? " btn-primary" : ""
+					}" title="${__("Show or hide rulers and guides")}">${__("Ruler")}</button>
 					<button type="button" class="btn btn-default btn-sm pfd-sample-btn">${
 						state.sampleDoc ? __("Clear sample") : __("Sample")
 					}</button>
@@ -2152,6 +2231,7 @@ frappe.provide("pdffiller.designer");
 
 	function bindEvents(app) {
 		app.querySelector(".pfd-ai-btn")?.addEventListener("click", openAIAssist);
+		app.querySelector(".pfd-ruler-btn")?.addEventListener("click", toggleRulers);
 		app.querySelector(".pfd-sample-btn")?.addEventListener("click", loadSampleDocument);
 		app.querySelector(".pfd-save-btn")?.addEventListener("click", saveDesign);
 		app.querySelector(".pfd-preview-btn")?.addEventListener("click", previewWithDocument);
@@ -2194,8 +2274,44 @@ frappe.provide("pdffiller.designer");
 		});
 	}
 
+	function bindRulerGuides(container, pageSize) {
+		const wrap = container.querySelector(".pfd-canvas-wrap");
+		const guides = container.querySelector(".pfd-guides");
+		if (!wrap || !guides || !rulersEnabled()) return;
+		const guideX = guides.querySelector(".pfd-guide-x");
+		const guideY = guides.querySelector(".pfd-guide-y");
+		const label = guides.querySelector(".pfd-guide-label");
+		const markerX = container.querySelector(".pfd-ruler-x");
+		const markerY = container.querySelector(".pfd-ruler-y");
+		wrap.addEventListener("mousemove", (e) => {
+			const size = pageSize();
+			if (!size || !size.width || !size.height) return;
+			const rect = wrap.getBoundingClientRect();
+			if (!rect.width || !rect.height) return;
+			const x = e.clientX - rect.left;
+			const y = e.clientY - rect.top;
+			guides.hidden = false;
+			guideX.style.top = `${y}px`;
+			guideY.style.left = `${x}px`;
+			const ptX = Math.round((x / rect.width) * size.width);
+			const ptY = Math.round((y / rect.height) * size.height);
+			label.textContent = `${ptX} pt, ${ptY} pt`;
+			label.style.left = `${Math.min(x + 8, rect.width - 72)}px`;
+			label.style.top = `${Math.min(y + 8, rect.height - 18)}px`;
+			if (markerX) markerX.style.setProperty("--pfd-marker", `${(x / rect.width) * 100}%`);
+			if (markerY) markerY.style.setProperty("--pfd-marker", `${(y / rect.height) * 100}%`);
+		});
+		wrap.addEventListener("mouseleave", () => {
+			guides.hidden = true;
+		});
+	}
+
 	function bindCanvasEvents(container) {
 		if (!container) return;
+		bindRulerGuides(container, () => {
+			const page = getCurrentPage();
+			return page ? { width: page.width_pt, height: page.height_pt } : null;
+		});
 
 		container.querySelector(".pfd-prev-page")?.addEventListener("click", () => {
 			if (state.currentPage > 0) {
@@ -2558,16 +2674,7 @@ frappe.provide("pdffiller.designer");
 			else groupSelection();
 			return;
 		}
-		if (modifier && key === "c") {
-			e.preventDefault();
-			copySelection();
-			return;
-		}
-		if (modifier && key === "v") {
-			e.preventDefault();
-			pasteClipboard();
-			return;
-		}
+		if (modifier && (key === "c" || key === "v")) return;
 		if (!currentSelection().length) return;
 		if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown") {
 			e.preventDefault();
@@ -2622,6 +2729,30 @@ frappe.provide("pdffiller.designer");
 	pdffiller.designer.refresh = refresh;
 
 	document.addEventListener("keydown", onKeyDown);
+	document.addEventListener("copy", onCopyEvent);
+	document.addEventListener("paste", onPasteEvent);
+
+	function onCopyEvent(e) {
+		if (!isDesignerActive() || isTypingTarget(e.target)) return;
+		if (!currentSelection().length) return;
+		const data = copySelection({ systemEvent: true });
+		if (!data || !e.clipboardData) return;
+		const raw = JSON.stringify(data);
+		e.clipboardData.setData("application/x-pdffiller-fields", raw);
+		e.clipboardData.setData("text/plain", raw);
+		e.preventDefault();
+	}
+
+	function onPasteEvent(e) {
+		if (!isDesignerActive() || isTypingTarget(e.target)) return;
+		const api = multiSelect();
+		const raw =
+			e.clipboardData &&
+			(e.clipboardData.getData("application/x-pdffiller-fields") || e.clipboardData.getData("text/plain"));
+		const parsed = api && api.parseClipboardPayload(raw);
+		pasteClipboard(parsed || undefined);
+		e.preventDefault();
+	}
 
 	window.addEventListener("beforeunload", (e) => {
 		if (state.dirty) e.preventDefault();

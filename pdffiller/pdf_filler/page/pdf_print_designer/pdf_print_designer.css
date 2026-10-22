@@ -290,11 +290,62 @@
 	line-height: 1;
 }
 
+.ppd-canvas-stage.ppd-rulers-off {
+	grid-template-columns: 1fr;
+	grid-template-rows: 1fr 40px;
+}
+
+.ppd-canvas-stage.ppd-rulers-off .ppd-ruler-corner,
+.ppd-canvas-stage.ppd-rulers-off .ppd-ruler-top,
+.ppd-canvas-stage.ppd-rulers-off .ppd-ruler-left {
+	display: none;
+}
+
 .ppd-canvas-scroll {
 	grid-column: 2;
 	grid-row: 2;
 	overflow: auto;
 	padding: 24px 32px 48px;
+}
+
+.ppd-canvas-stage.ppd-rulers-off .ppd-canvas-scroll {
+	grid-column: 1;
+	grid-row: 1;
+}
+
+.pfd-guides {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	z-index: 8;
+}
+
+.pfd-guide {
+	position: absolute;
+	background: rgba(36, 144, 239, 0.85);
+}
+
+.pfd-guide-x {
+	left: 0;
+	right: 0;
+	height: 1px;
+}
+
+.pfd-guide-y {
+	top: 0;
+	bottom: 0;
+	width: 1px;
+}
+
+.pfd-guide-label {
+	position: absolute;
+	padding: 1px 4px;
+	border-radius: 3px;
+	background: #2490ef;
+	color: #fff;
+	font-size: 10px;
+	line-height: 14px;
+	white-space: nowrap;
 }
 
 .ppd-zoom-bar,

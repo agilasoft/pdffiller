@@ -149,44 +149,106 @@
 	}
 
 	const CLIP_KEY = "pdffiller.designer.clipboard";
+	const CLIP_MIME = "application/x-pdffiller-fields";
 	let memoryClipboard = null;
 	let contextMenu = null;
 	let contextCleanup = null;
 
-	function clipStorage() {
+	function clipStores() {
+		const stores = [];
+		[localStorage, sessionStorage].forEach((storage) => {
+			try {
+				if (storage) stores.push(storage);
+			} catch (err) {
+				// Storage can throw when the browser blocks it.
+			}
+		});
+		return stores;
+	}
+
+	function parseClipboardPayload(raw) {
+		if (!raw || typeof raw !== "string") return null;
 		try {
-			if (typeof sessionStorage !== "undefined") return sessionStorage;
+			const parsed = JSON.parse(raw);
+			if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.objects) || !parsed.objects.length) {
+				return null;
+			}
+			if (!parsed.source || !parsed.source.editor) return null;
+			return parsed;
 		} catch (err) {
 			return null;
+		}
+	}
+
+	function writeClipboard(payload) {
+		const objects = payload && Array.isArray(payload.objects) ? payload.objects : [];
+		let cloned = [];
+		try {
+			cloned = JSON.parse(JSON.stringify(objects));
+		} catch (err) {
+			cloned = objects.map((obj) => Object.assign({}, obj));
+		}
+		const data = {
+			version: 1,
+			copiedAt: Date.now(),
+			source: (payload && payload.source) || {},
+			objects: cloned,
+		};
+		memoryClipboard = data;
+		const raw = JSON.stringify(data);
+		clipStores().forEach((storage) => {
+			try {
+				storage.setItem(CLIP_KEY, raw);
+			} catch (err) {
+				// Keep the in-memory copy when storage is full or blocked.
+			}
+		});
+		return data;
+	}
+
+	function readStoredClipboard() {
+		const stores = clipStores();
+		for (let i = 0; i < stores.length; i += 1) {
+			try {
+				const parsed = parseClipboardPayload(stores[i].getItem(CLIP_KEY) || "");
+				if (parsed) return parsed;
+			} catch (err) {
+				// Try the next store.
+			}
 		}
 		return null;
 	}
 
-	function writeClipboard(payload) {
-		const data = {
-			version: 1,
-			copiedAt: Date.now(),
-			source: payload.source || {},
-			objects: JSON.parse(JSON.stringify(payload.objects || [])),
-		};
-		memoryClipboard = data;
-		try {
-			clipStorage()?.setItem(CLIP_KEY, JSON.stringify(data));
-		} catch (err) {
-			// The in-memory copy still works for this desk session.
+	function readClipboard() {
+		const stored = readStoredClipboard();
+		const memory =
+			memoryClipboard && memoryClipboard.objects && memoryClipboard.objects.length
+				? memoryClipboard
+				: null;
+		if (stored && memory) {
+			const winner = (memory.copiedAt || 0) >= (stored.copiedAt || 0) ? memory : stored;
+			memoryClipboard = winner;
+			return winner;
 		}
-		return data;
+		if (stored) {
+			memoryClipboard = stored;
+			return stored;
+		}
+		return memory;
 	}
 
-	function readClipboard() {
-		if (memoryClipboard && memoryClipboard.objects) return memoryClipboard;
-		try {
-			const raw = clipStorage()?.getItem(CLIP_KEY);
-			memoryClipboard = raw ? JSON.parse(raw) : null;
-		} catch (err) {
-			memoryClipboard = null;
+	function publishClipboard(data) {
+		const raw = JSON.stringify(data || memoryClipboard || {});
+		if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
+			navigator.clipboard.writeText(raw).catch(() => {});
 		}
-		return memoryClipboard && memoryClipboard.objects ? memoryClipboard : null;
+	}
+
+	function readSystemClipboard() {
+		if (typeof navigator === "undefined" || !navigator.clipboard || !navigator.clipboard.readText) {
+			return Promise.resolve(null);
+		}
+		return navigator.clipboard.readText().then(parseClipboardPayload).catch(() => null);
 	}
 
 	function hasClipboard() {
@@ -398,8 +460,12 @@
 		applySelection,
 		newGroupId,
 		cleanGroupId,
+		CLIP_MIME,
 		writeClipboard,
 		readClipboard,
+		publishClipboard,
+		readSystemClipboard,
+		parseClipboardPayload,
 		hasClipboard,
 		uniqueFieldName,
 		preparePaste,
