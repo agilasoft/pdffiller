@@ -198,6 +198,40 @@
 	background: #323639;
 }
 
+.pdffiller-pdfjs {
+	position: absolute;
+	inset: 0;
+	background: #323639;
+}
+
+.pdffiller-pdfjs-toolbar {
+	position: absolute;
+	top: 0;
+	right: 0;
+	left: 0;
+	z-index: 2;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 36px;
+	padding: 0 8px;
+	background: #2a2d31;
+}
+
+.pdffiller-pdfjs-scroll {
+	position: absolute;
+	top: 36px;
+	right: 0;
+	bottom: 0;
+	left: 0;
+	overflow: auto;
+	background: #323639;
+}
+
+.pdffiller-pdfjs-scroll .annotationLayer :is(input, textarea, select):disabled {
+	pointer-events: none;
+}
+
 .pdffiller-loading {
 	display: flex;
 	align-items: center;
